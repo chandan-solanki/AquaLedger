@@ -4,7 +4,8 @@
       "Bash(uv python *)",
       "Bash(where psql *)",
       "Bash(where docker *)",
-      "Bash(docker --version)"
+      "Bash(docker --version)",
+      "Bash(uv --version)"
     ]
   }
 }

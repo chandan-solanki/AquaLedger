@@ -1,204 +1,411 @@
 # TASKS.md
 
-# Sprint 1 - Backend Foundation
+# Sprint 2 – Authentication & Authorization
 
 **Sprint Goal**
 
-Build a production-ready FastAPI backend foundation. No business modules should be implemented in this sprint.
+Build a secure, production-ready authentication and authorization system that will serve as the foundation for every future FishERP module.
+
+No business modules (Companies, Fish, Boats, Trips, Invoices, Payments, Expenses, Reports, Documents, OCR, AI) should be implemented in this sprint.
 
 ---
 
-# Phase 1 - Project Initialization
+# Phase 1 – Authentication Module
 
-## Project Setup
+## Goal
 
-- [ ] Create backend directory
-- [ ] Initialize project using `uv`
-- [ ] Create Python virtual environment
-- [ ] Configure `pyproject.toml`
-- [ ] Create `.python-version`
-- [ ] Create `.gitignore`
-- [ ] Create `.env`
-- [ ] Create `.env.example`
-- [ ] Verify project runs correctly
+Create the complete authentication module following the project architecture.
 
----
+Directory
 
-# Phase 2 - Install Dependencies
+app/modules/auth/
 
-## Core
+Required files
 
-- [ ] FastAPI
-- [ ] Uvicorn
-- [ ] Pydantic v2
-- [ ] Pydantic Settings
-
-## Database
-
-- [ ] SQLAlchemy 2
-- [ ] Alembic
-- [ ] asyncpg
-
-## Development
-
-- [ ] Ruff
-- [ ] Pytest
-- [ ] HTTPX
-- [ ] Python Dotenv
+- [ ] router.py
+- [ ] service.py
+- [ ] repository.py
+- [ ] models.py
+- [ ] schemas.py
+- [ ] security.py
+- [ ] dependencies.py
+- [ ] permissions.py
+- [ ] constants.py
+- [ ] exceptions.py
 
 ---
 
-# Phase 3 - Project Structure
+# Phase 2 – Database Models
 
-Create production-ready folder structure.
+## User
 
-```
-backend/
-│
-├── app/
-│   ├── api/
-│   ├── core/
-│   ├── db/
-│   ├── models/
-│   ├── schemas/
-│   ├── services/
-│   ├── repositories/
-│   ├── middleware/
-│   ├── utils/
-│   ├── common/
-│   └── main.py
-│
-├── migrations/
-├── tests/
-├── scripts/
-└── logs/
-```
+Create the User model.
 
-- [ ] Create folders
-- [ ] Create `__init__.py`
-- [ ] Create main.py
+Fields
+
+- [ ] UUID Primary Key
+- [ ] Email
+- [ ] Username
+- [ ] Full Name
+- [ ] Phone Number
+- [ ] Password Hash
+- [ ] Account Status
+- [ ] Last Login
+- [ ] Password Changed At
+- [ ] Created At
+- [ ] Updated At
+
+Account Status
+
+- ACTIVE
+- INACTIVE
+- LOCKED
+- PASSWORD_EXPIRED
 
 ---
 
-# Phase 4 - Configuration
+## Role
 
-## Environment
+Create Role model.
 
-- [ ] Environment loader
-- [ ] Settings class
-- [ ] Development configuration
-- [ ] Production configuration
+Default Roles
 
----
-
-# Phase 5 - Database
-
-- [ ] Configure PostgreSQL connection
-- [ ] Configure SQLAlchemy
-- [ ] Configure Async Session
-- [ ] Configure Base Model
-- [ ] Configure Alembic
-- [ ] Generate initial migration
-- [ ] Verify migration works
+- [ ] Super Admin
+- [ ] Admin
+- [ ] Manager
+- [ ] Accountant
+- [ ] Operator
 
 ---
 
-# Phase 6 - API Foundation
+## Permission
 
-- [ ] Create FastAPI application
-- [ ] Configure lifespan
-- [ ] Configure API versioning
-- [ ] Configure CORS
-- [ ] Register routers
-- [ ] Create health endpoint
+Create Permission model.
 
-Health endpoint
+Examples
 
-GET /api/v1/health
-
-Response
-
-```json
-{
-  "status": "healthy"
-}
-```
+- manage_users
+- manage_companies
+- manage_fish
+- manage_boats
+- manage_trips
+- manage_invoices
+- manage_payments
+- manage_reports
 
 ---
 
-# Phase 7 - Logging
+## Mapping Tables
 
-- [ ] Configure structured logging
-- [ ] Console logging
-- [ ] File logging
-- [ ] Error logging
+- [ ] UserRole
+- [ ] RolePermission
 
 ---
 
-# Phase 8 - Error Handling
+## Refresh Token
 
-- [ ] Global exception handler
-- [ ] Validation error handler
-- [ ] HTTP exception handler
-- [ ] Standard error response
+Store refresh tokens securely.
 
----
+Fields
 
-# Phase 9 - Testing
-
-- [ ] Configure pytest
-- [ ] Create first API test
-- [ ] Test health endpoint
+- [ ] User
+- [ ] Token Hash
+- [ ] Expires At
+- [ ] Revoked At
 
 ---
 
-# Phase 10 - Code Quality
+## Audit Log
 
-- [ ] Configure Ruff
-- [ ] Configure formatting
-- [ ] Verify lint passes
-- [ ] Verify type checking
+Create audit log table.
+
+Track
+
+- Login
+- Logout
+- Failed Login
+- Password Change
+- User Creation
+
+---
+
+# Phase 3 – Security
+
+Implement
+
+- [ ] JWT Access Token
+- [ ] Refresh Token
+- [ ] Secure Token Generation
+- [ ] Token Validation
+- [ ] Token Expiration
+- [ ] Argon2 Password Hashing
+- [ ] Password Verification
+- [ ] Login Rate Limiting
+- [ ] Password Policy
+
+Password Policy
+
+- Minimum 8 characters
+- Uppercase
+- Lowercase
+- Number
+- Special Character
+
+Configuration should come from .env
+
+---
+
+# Phase 4 – Authentication APIs
+
+## Login
+
+POST /api/v1/auth/login
+
+---
+
+## Refresh Token
+
+POST /api/v1/auth/refresh
+
+---
+
+## Logout
+
+POST /api/v1/auth/logout
+
+---
+
+## Current User
+
+GET /api/v1/auth/me
+
+---
+
+## Change Password
+
+POST /api/v1/auth/change-password
+
+---
+
+# Phase 5 – Authorization
+
+Implement RBAC.
+
+- [ ] Current User Dependency
+- [ ] Authentication Dependency
+- [ ] Role Validation
+- [ ] Permission Validation
+- [ ] Protected Routes
+
+---
+
+# Phase 6 – Middleware
+
+Implement
+
+- [ ] Authentication Middleware
+- [ ] Request User Context
+- [ ] Unauthorized Handler
+- [ ] Forbidden Handler
+
+---
+
+# Phase 7 – Validation
+
+Validate
+
+- [ ] Email
+- [ ] Username
+- [ ] Password
+- [ ] Login Request
+- [ ] Refresh Token
+- [ ] API Responses
+
+---
+
+# Phase 8 – Error Handling
+
+Create custom exceptions.
+
+- [ ] Invalid Credentials
+- [ ] Invalid Token
+- [ ] Expired Token
+- [ ] Unauthorized
+- [ ] Forbidden
+- [ ] User Not Found
+- [ ] Account Locked
+- [ ] Account Disabled
+
+Return consistent JSON responses.
+
+---
+
+# Phase 9 – Database
+
+Create Alembic migration.
+
+Seed
+
+- [ ] Default Roles
+- [ ] Default Permissions
+- [ ] Initial Super Admin
+
+Default Super Admin
+
+Email
+
+admin@fisherp.local
+
+Password
+
+Admin@123
+
+Password must be changed after first login.
+
+---
+
+# Phase 10 – Testing
+
+Write
+
+- [ ] Unit Tests
+- [ ] Login Tests
+- [ ] Logout Tests
+- [ ] Refresh Token Tests
+- [ ] Current User Tests
+- [ ] RBAC Tests
+- [ ] Middleware Tests
+- [ ] API Tests
+
+Verify
+
+- Ruff
+- MyPy
+- Pytest
+
+All must pass.
+
+---
+
+# Phase 11 – Documentation
+
+Update Swagger.
+
+Include
+
+- Example Requests
+- Example Responses
+- Authentication Flow
+- JWT Usage
 
 ---
 
 # Sprint Deliverables
 
-At the end of Sprint 1 the project should have:
+At the end of Sprint 2 the project must have
 
-- FastAPI running
-- PostgreSQL connected
-- Alembic working
-- Environment configuration
-- Logging
-- Error handling
-- Health endpoint
-- Testing setup
-- Production-ready folder structure
+✅ User Management
 
-No authentication.
+✅ Secure Login
 
-No users.
+✅ JWT Authentication
 
-No companies.
+✅ Refresh Tokens
 
-No invoices.
+✅ Argon2 Password Hashing
 
-No business logic.
+✅ Role Based Access Control
+
+✅ Permission System
+
+✅ Authentication Middleware
+
+✅ Protected APIs
+
+✅ Current User Endpoint
+
+✅ Change Password
+
+✅ Audit Logs
+
+✅ Default Roles
+
+✅ Initial Super Admin
+
+No Company Module
+
+No Fish Module
+
+No Invoice Module
+
+No Payment Module
+
+No Business Logic
+
+---
+
+# Definition of Done
+
+Sprint 2 is complete only when
+
+- [ ] Login works
+- [ ] Logout works
+- [ ] Refresh Token works
+- [ ] JWT works
+- [ ] RBAC works
+- [ ] Middleware works
+- [ ] Audit Logging works
+- [ ] Alembic Migration created
+- [ ] Default Roles seeded
+- [ ] Default Permissions seeded
+- [ ] Super Admin seeded
+- [ ] Tests pass
+- [ ] Ruff passes
+- [ ] MyPy passes
+- [ ] Swagger updated
+
+---
+
+# Out of Scope
+
+Do NOT implement
+
+- User Registration
+- Forgot Password
+- Email Verification
+- Google Login
+- GitHub Login
+- OTP
+- MFA
+- OAuth
+- Company Management
+- Fish Management
+- Boat Management
+- Trip Management
+- Invoice Management
+- Payment Management
+- Expense Management
+- Reports
+- OCR
+- AI Assistant
 
 ---
 
 # Claude Code Instructions
 
-Implement this sprint incrementally.
+Before coding
 
-Before writing code:
+1. Read CLAUDE.md
+2. Read ARCHITECTURE.md
+3. Explain the implementation plan
+4. Work phase by phase
+5. Run Ruff after each phase
+6. Run MyPy after each phase
+7. Run Pytest after each phase
+8. Wait for approval before starting the next phase
 
-1. Explain the implementation plan.
-2. Create the folder structure.
-3. Configure dependencies.
-4. Configure database.
-5. Configure FastAPI.
-6. Configure testing.
-7. Stop after Sprint 1 is complete.
+Do not generate the entire sprint in one response.
 
-Do not implement Authentication or any ERP modules.
+Implement incrementally.
+
+Never modify project architecture without approval.
