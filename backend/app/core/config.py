@@ -33,6 +33,21 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = False
 
+    # Security - JWT
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 7
+
+    # Security - password policy
+    password_min_length: int = 8
+
+    # Security - login rate limiting / account lockout
+    login_rate_limit_attempts: int = 5
+    login_rate_limit_window_minutes: int = 15
+    account_lockout_threshold: int = 5
+    account_lockout_minutes: int = 15
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
