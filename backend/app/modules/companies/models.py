@@ -1,6 +1,7 @@
 import datetime as dt
 import uuid
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Date,
@@ -14,11 +15,14 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid6 import uuid7
 
 from app.db.base import Base, TimestampMixin
 from app.modules.companies.constants import CompanyStatus, CompanyType, OpeningBalanceType
+
+if TYPE_CHECKING:
+    from app.modules.boats.models import Boat
 
 
 class Company(TimestampMixin, Base):
@@ -80,6 +84,8 @@ class Company(TimestampMixin, Base):
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+
+    boats: Mapped[list["Boat"]] = relationship(back_populates="company")
 
     __table_args__ = (
         Index(

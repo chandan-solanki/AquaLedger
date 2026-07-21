@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.core.config import get_settings
 from app.db.base import Base
 from app.modules.auth import models as auth_models  # noqa: F401
+from app.modules.boats import models as boats_models  # noqa: F401
 from app.modules.companies import models as companies_models  # noqa: F401
 from app.modules.fish import models as fish_models  # noqa: F401
 

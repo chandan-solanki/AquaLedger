@@ -1,17 +1,18 @@
-# Sprint 4 - Fish Management
+# Sprint 5 - Boat Management
 
 ## Sprint Goal
 
-Build the Fish Master module.
+Build the Boat Management module.
 
-This module stores all fish master data used throughout the ERP.
+This module manages fishing boats used for trips and fish catches.
 
-No Inventory.
-No Purchase.
-No Sales.
-No Boat Trips.
+A Boat belongs to a Company (Owner).
 
-Only the Fish Master.
+No Trip logic.
+No Catch logic.
+No Invoice logic.
+
+Only Boat Master.
 
 ---
 
@@ -21,62 +22,68 @@ Only the Fish Master.
 
 Create:
 
-app/modules/fish/
+app/modules/boats/
 
-- [ ] router.py
-- [ ] service.py
-- [ ] repository.py
-- [ ] models.py
-- [ ] schemas.py
-- [ ] dependencies.py
-- [ ] permissions.py
-- [ ] constants.py
-- [ ] exceptions.py
+- [x] router.py
+- [x] service.py
+- [x] repository.py
+- [x] models.py
+- [x] schemas.py
+- [x] dependencies.py
+- [x] permissions.py
+- [x] constants.py
+- [x] exceptions.py
 
 ---
 
 ## Database Model
 
-Create Fish model.
+Create Boat model.
 
 Fields
 
-- [ ] id (UUID v7)
-- [ ] tenant_id
-- [ ] code
-- [ ] name
-- [ ] local_name
-- [ ] scientific_name
-- [ ] category
-- [ ] unit
-- [ ] default_purchase_rate
-- [ ] default_sale_rate
-- [ ] hsn_code
-- [ ] description
-- [ ] is_active
-- [ ] created_at
-- [ ] updated_at
-- [ ] deleted_at
-- [ ] created_by
-- [ ] updated_by
-- [ ] deleted_by
+- [x] id (UUID v7)
+- [x] tenant_id
+- [x] company_id (FK -> companies.id)
+- [x] code
+- [x] name
+- [x] registration_number
+- [x] license_number
+- [x] boat_type
+- [x] capacity_kg
+- [x] engine_number
+- [x] engine_hp
+- [x] captain_name
+- [x] captain_phone
+- [x] insurance_expiry
+- [x] license_expiry
+- [x] notes
+- [x] is_active
+- [x] created_at
+- [x] updated_at
+- [x] deleted_at
+- [x] created_by
+- [x] updated_by
+- [x] deleted_by
 
 ---
 
 ## Constraints
 
-- [ ] Unique code per tenant
-- [ ] Unique name per tenant
-- [ ] Soft Delete
-- [ ] Audit Fields
-- [ ] Alembic Migration
+- [x] Unique boat code per tenant
+- [x] Unique registration number per tenant
+- [x] FK to Company
+- [x] Soft Delete
+- [x] Audit Fields
+- [x] Alembic Migration
 
 ---
 
-## Session Deliverable
+## Session Deliverables
 
-- Fish table created
-- Migration completed
+- Boat table
+- Relationships
+- Migration
 - Repository skeleton
 - Router skeleton
 - Service skeleton
@@ -87,32 +94,31 @@ Fields
 
 Implement
 
-- [ ] Create Fish
-- [ ] Get Fish
-- [ ] List Fish
-- [ ] Update Fish
-- [ ] Delete Fish
+- [x] Create Boat
+- [x] Get Boat
+- [x] List Boats
+- [x] Update Boat
+- [x] Delete Boat
 
-Use
+Requirements
 
-- [ ] RBAC
-- [ ] Tenant Isolation
-- [ ] Soft Delete
-- [ ] Audit Fields
+- [x] RBAC
+- [x] Tenant Isolation
+- [x] Soft Delete
+- [x] Audit Fields
+- [x] Company existence validation
 
----
+Endpoints
 
-## Endpoints
+POST /api/v1/boats
 
-POST /api/v1/fish
+GET /api/v1/boats
 
-GET /api/v1/fish
+GET /api/v1/boats/{id}
 
-GET /api/v1/fish/{id}
+PUT /api/v1/boats/{id}
 
-PUT /api/v1/fish/{id}
-
-DELETE /api/v1/fish/{id}
+DELETE /api/v1/boats/{id}
 
 ---
 
@@ -120,43 +126,41 @@ DELETE /api/v1/fish/{id}
 
 Implement
 
-- [ ] Search
-- [ ] Filter
-- [ ] Pagination
-- [ ] Sorting
-- [ ] Duplicate Validation
+- [x] Search
+- [x] Filtering
+- [x] Sorting
+- [x] Pagination
+- [x] Duplicate Validation
 
 Search
 
-- Code
-- Name
-- Local Name
-- Scientific Name
+- Boat Name
+- Boat Code
+- Registration Number
+- Captain Name
 
-Filter
+Filters
 
-- Category
-- Unit
-- Active Status
+- Boat Type
+- Company
+- Active
+- Insurance Expired
+- License Expired
 
-Sort
+Sorting
 
 - Name
 - Code
 - Created At
 - Updated At
 
-Pagination
-
-- page
-- page_size
-
 Business Rules
 
-- Code unique per tenant
-- Name unique per tenant
-- Deleted fish hidden
-- Cannot update deleted fish
+- Boat code unique per tenant
+- Registration number unique per tenant
+- Company must exist
+- Deleted boats hidden
+- Cannot update deleted boat
 - Return HTTP 409 on duplicates
 
 ---
@@ -165,48 +169,47 @@ Business Rules
 
 Testing
 
-- [ ] Unit Tests
-- [ ] Repository Tests
-- [ ] Integration Tests
-- [ ] API Tests
+- [x] Unit Tests
+- [x] Repository Tests
+- [x] Integration Tests
+- [x] API Tests
 
 Verify
 
 - CRUD
 - Search
-- Filter
-- Sorting
+- Filters
 - Pagination
+- Sorting
 - Duplicate Validation
-- Soft Delete
+- Company FK
 - RBAC
 - Tenant Isolation
+- Soft Delete
 
 Documentation
 
-- [ ] Swagger
-- [ ] Example Requests
-- [ ] Example Responses
+- [x] Swagger
+- [x] Example Requests
+- [x] Example Responses
 
 Quality
 
-- [ ] Ruff
-- [ ] MyPy
-- [ ] Pytest
+- [x] Ruff
+- [x] MyPy
+- [x] Pytest
 
 ---
 
 # Sprint Deliverables
 
-At the end of Sprint 4
-
-✅ Fish Master Module
+✅ Boat Master Module
 
 ✅ CRUD APIs
 
 ✅ Search
 
-✅ Filter
+✅ Filtering
 
 ✅ Pagination
 
@@ -220,24 +223,27 @@ At the end of Sprint 4
 
 ✅ Soft Delete
 
+✅ Company Relationship
+
 ✅ Tests
 
 ---
 
 # Definition of Done
 
-- [ ] Database Migration
-- [ ] CRUD APIs
-- [ ] Search
-- [ ] Filtering
-- [ ] Pagination
-- [ ] Sorting
-- [ ] Validation
-- [ ] Duplicate Handling
-- [ ] Tests Passing
-- [ ] Ruff Passing
-- [ ] MyPy Passing
-- [ ] Swagger Updated
+- [x] Migration created
+- [x] CRUD APIs
+- [x] Search
+- [x] Filtering
+- [x] Pagination
+- [x] Sorting
+- [x] Validation
+- [x] Duplicate Handling
+- [x] Company FK Validation
+- [x] Tests Passing
+- [x] Ruff Passing
+- [x] MyPy Passing
+- [x] Swagger Updated
 
 ---
 
@@ -253,7 +259,7 @@ before coding.
 
 Implement only one session at a time.
 
-Explain implementation plan.
+Explain implementation plan first.
 
 Run
 

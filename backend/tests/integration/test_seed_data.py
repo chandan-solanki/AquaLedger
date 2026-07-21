@@ -37,10 +37,12 @@ class TestSeededRoles:
             )
         ).all()
         counts: dict[str, int] = {row[0]: row[1] for row in rows}
-        # Derived from ARCHITECTURE §9.2's role/permission matrix (Phase 2).
-        assert counts["super_admin"] == 31
-        assert counts["admin"] == 31
-        assert counts["manager"] == 25
+        # Derived from ARCHITECTURE §9.2's role/permission matrix (Phase 2),
+        # plus boat:create/edit/delete added for super_admin/admin/manager in
+        # migration 72d5f6096c81 (Sprint 5 Session 2).
+        assert counts["super_admin"] == 34
+        assert counts["admin"] == 34
+        assert counts["manager"] == 28
         assert counts["accountant"] == 20
         assert counts["operator"] == 3
 
@@ -61,11 +63,11 @@ class TestSeededRoles:
 
 
 class TestSeededPermissions:
-    async def test_thirty_one_permissions_seeded(self, db_session: AsyncSession) -> None:
+    async def test_thirty_four_permissions_seeded(self, db_session: AsyncSession) -> None:
         count = (
             await db_session.execute(select(func.count()).select_from(Permission))
         ).scalar_one()
-        assert count == 31
+        assert count == 34
 
     async def test_permission_codes_are_unique(self, db_session: AsyncSession) -> None:
         codes = (await db_session.execute(select(Permission.code))).scalars().all()
