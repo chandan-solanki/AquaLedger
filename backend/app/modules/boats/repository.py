@@ -112,3 +112,17 @@ class BoatRepository:
         constraint violation) as a single, deliberate step."""
         self._session.add(boat)
         return boat
+
+    async def find_ids_by_name(self, tenant_id: uuid.UUID, pattern: str) -> list[uuid.UUID]:
+        """Boat ids whose name matches `pattern` (a caller-supplied ILIKE
+        pattern), for this tenant. Exists so other modules (trips) can
+        search by boat name without importing the Boat model directly -
+        cross-module access goes through BoatService only (ARCHITECTURE.md §2)."""
+        result = await self._session.execute(
+            select(Boat.id).where(
+                Boat.tenant_id == tenant_id,
+                Boat.deleted_at.is_(None),
+                Boat.name.ilike(pattern),
+            )
+        )
+        return list(result.scalars().all())

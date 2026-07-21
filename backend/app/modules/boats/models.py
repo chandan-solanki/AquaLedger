@@ -22,6 +22,7 @@ from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.modules.companies.models import Company
+    from app.modules.trips.models import Trip
 
 
 class Boat(TimestampMixin, Base):
@@ -63,6 +64,7 @@ class Boat(TimestampMixin, Base):
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
 
     company: Mapped["Company"] = relationship(back_populates="boats")
+    trips: Mapped[list["Trip"]] = relationship(back_populates="boat")
 
     __table_args__ = (
         Index(

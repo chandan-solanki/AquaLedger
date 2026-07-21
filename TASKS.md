@@ -1,18 +1,19 @@
-# Sprint 5 - Boat Management
+# Sprint 6 - Trip Management
 
 ## Sprint Goal
 
-Build the Boat Management module.
+Build the Trip Management module.
 
-This module manages fishing boats used for trips and fish catches.
+A Trip represents one fishing journey performed by a boat.
 
-A Boat belongs to a Company (Owner).
+A Trip belongs to one Boat.
 
-No Trip logic.
-No Catch logic.
-No Invoice logic.
+No Catch Management.
+No Trip Expenses.
+No Invoice.
+No Payment.
 
-Only Boat Master.
+Only Trip Management.
 
 ---
 
@@ -22,67 +23,81 @@ Only Boat Master.
 
 Create:
 
-app/modules/boats/
+app/modules/trips/
 
-- [x] router.py
-- [x] service.py
-- [x] repository.py
-- [x] models.py
-- [x] schemas.py
-- [x] dependencies.py
-- [x] permissions.py
-- [x] constants.py
-- [x] exceptions.py
+- [ ] router.py
+- [ ] service.py
+- [ ] repository.py
+- [ ] models.py
+- [ ] schemas.py
+- [ ] dependencies.py
+- [ ] permissions.py
+- [ ] constants.py
+- [ ] exceptions.py
 
 ---
 
 ## Database Model
 
-Create Boat model.
+Create Trip model.
 
 Fields
 
-- [x] id (UUID v7)
-- [x] tenant_id
-- [x] company_id (FK -> companies.id)
-- [x] code
-- [x] name
-- [x] registration_number
-- [x] license_number
-- [x] boat_type
-- [x] capacity_kg
-- [x] engine_number
-- [x] engine_hp
-- [x] captain_name
-- [x] captain_phone
-- [x] insurance_expiry
-- [x] license_expiry
-- [x] notes
-- [x] is_active
-- [x] created_at
-- [x] updated_at
-- [x] deleted_at
-- [x] created_by
-- [x] updated_by
-- [x] deleted_by
+- [ ] id (UUID v7)
+- [ ] tenant_id
+- [ ] boat_id (FK -> boats.id)
+- [ ] trip_number
+- [ ] trip_type
+- [ ] captain_name
+- [ ] departure_port
+- [ ] arrival_port
+- [ ] departure_datetime
+- [ ] expected_return_datetime
+- [ ] actual_return_datetime
+- [ ] status
+- [ ] notes
+- [ ] is_active
+- [ ] created_at
+- [ ] updated_at
+- [ ] deleted_at
+- [ ] created_by
+- [ ] updated_by
+- [ ] deleted_by
+
+---
+
+## Enums
+
+Trip Status
+
+- [ ] PLANNED
+- [ ] DEPARTED
+- [ ] RETURNED
+- [ ] CANCELLED
+
+Trip Type
+
+- [ ] FISHING
+- [ ] TRANSPORT
+- [ ] MAINTENANCE
+- [ ] OTHER
 
 ---
 
 ## Constraints
 
-- [x] Unique boat code per tenant
-- [x] Unique registration number per tenant
-- [x] FK to Company
-- [x] Soft Delete
-- [x] Audit Fields
-- [x] Alembic Migration
+- [ ] Unique trip_number per tenant
+- [ ] FK to Boat
+- [ ] Soft Delete
+- [ ] Audit Fields
+- [ ] Alembic Migration
 
 ---
 
 ## Session Deliverables
 
-- Boat table
-- Relationships
+- Trip table
+- Relationship with Boat
 - Migration
 - Repository skeleton
 - Router skeleton
@@ -94,31 +109,31 @@ Fields
 
 Implement
 
-- [x] Create Boat
-- [x] Get Boat
-- [x] List Boats
-- [x] Update Boat
-- [x] Delete Boat
+- [ ] Create Trip
+- [ ] Get Trip
+- [ ] List Trips
+- [ ] Update Trip
+- [ ] Delete Trip
 
 Requirements
 
-- [x] RBAC
-- [x] Tenant Isolation
-- [x] Soft Delete
-- [x] Audit Fields
-- [x] Company existence validation
+- [ ] RBAC
+- [ ] Tenant Isolation
+- [ ] Soft Delete
+- [ ] Audit Fields
+- [ ] Boat validation
 
 Endpoints
 
-POST /api/v1/boats
+POST /api/v1/trips
 
-GET /api/v1/boats
+GET /api/v1/trips
 
-GET /api/v1/boats/{id}
+GET /api/v1/trips/{id}
 
-PUT /api/v1/boats/{id}
+PUT /api/v1/trips/{id}
 
-DELETE /api/v1/boats/{id}
+DELETE /api/v1/trips/{id}
 
 ---
 
@@ -126,42 +141,44 @@ DELETE /api/v1/boats/{id}
 
 Implement
 
-- [x] Search
-- [x] Filtering
-- [x] Sorting
-- [x] Pagination
-- [x] Duplicate Validation
+- [ ] Search
+- [ ] Filtering
+- [ ] Pagination
+- [ ] Sorting
+- [ ] Duplicate Validation
+- [ ] Business Rules
 
 Search
 
+- Trip Number
 - Boat Name
-- Boat Code
-- Registration Number
 - Captain Name
 
 Filters
 
-- Boat Type
-- Company
-- Active
-- Insurance Expired
-- License Expired
+- Boat
+- Trip Status
+- Trip Type
+- Departure Date
+- Return Date
 
 Sorting
 
-- Name
-- Code
+- Trip Number
+- Departure Date
 - Created At
 - Updated At
 
 Business Rules
 
-- Boat code unique per tenant
-- Registration number unique per tenant
-- Company must exist
-- Deleted boats hidden
-- Cannot update deleted boat
-- Return HTTP 409 on duplicates
+- [ ] Boat must exist
+- [ ] Boat must be active
+- [ ] Boat must belong to current tenant
+- [ ] Boat cannot have more than one active trip
+- [ ] Actual return cannot be before departure
+- [ ] Returned trips cannot change boat
+- [ ] Deleted trips hidden
+- [ ] Return HTTP 409 on duplicates
 
 ---
 
@@ -169,43 +186,44 @@ Business Rules
 
 Testing
 
-- [x] Unit Tests
-- [x] Repository Tests
-- [x] Integration Tests
-- [x] API Tests
+- [ ] Unit Tests
+- [ ] Repository Tests
+- [ ] Integration Tests
+- [ ] API Tests
 
 Verify
 
 - CRUD
 - Search
-- Filters
-- Pagination
+- Filtering
 - Sorting
+- Pagination
 - Duplicate Validation
-- Company FK
+- Boat Validation
+- Active Trip Validation
 - RBAC
 - Tenant Isolation
 - Soft Delete
 
 Documentation
 
-- [x] Swagger
-- [x] Example Requests
-- [x] Example Responses
+- [ ] Swagger
+- [ ] Example Requests
+- [ ] Example Responses
 
 Quality
 
-- [x] Ruff
-- [x] MyPy
-- [x] Pytest
+- [ ] Ruff
+- [ ] MyPy
+- [ ] Pytest
 
 ---
 
 # Sprint Deliverables
 
-✅ Boat Master Module
+✅ Trip Management
 
-✅ CRUD APIs
+✅ CRUD
 
 ✅ Search
 
@@ -217,13 +235,15 @@ Quality
 
 ✅ Validation
 
+✅ Boat Relationship
+
+✅ Active Trip Validation
+
 ✅ RBAC
 
 ✅ Tenant Isolation
 
 ✅ Soft Delete
-
-✅ Company Relationship
 
 ✅ Tests
 
@@ -231,19 +251,20 @@ Quality
 
 # Definition of Done
 
-- [x] Migration created
-- [x] CRUD APIs
-- [x] Search
-- [x] Filtering
-- [x] Pagination
-- [x] Sorting
-- [x] Validation
-- [x] Duplicate Handling
-- [x] Company FK Validation
-- [x] Tests Passing
-- [x] Ruff Passing
-- [x] MyPy Passing
-- [x] Swagger Updated
+- [ ] Migration
+- [ ] CRUD
+- [ ] Search
+- [ ] Filtering
+- [ ] Pagination
+- [ ] Sorting
+- [ ] Validation
+- [ ] Duplicate Validation
+- [ ] Boat Validation
+- [ ] Active Trip Validation
+- [ ] Tests Passing
+- [ ] Ruff Passing
+- [ ] MyPy Passing
+- [ ] Swagger Updated
 
 ---
 
@@ -257,9 +278,9 @@ Read
 
 before coding.
 
-Implement only one session at a time.
+Implement one session at a time.
 
-Explain implementation plan first.
+Explain the implementation plan first.
 
 Run
 
