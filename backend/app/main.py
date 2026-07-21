@@ -40,6 +40,10 @@ _OPENAPI_TAGS = [
         "description": "Login, token refresh, logout, current-user profile, and password change.",
     },
     {"name": "companies", "description": "Customer/supplier company records (CRUD)."},
+    {
+        "name": "boats",
+        "description": "Fishing boat master data, owned by a company (CRUD, search, filters).",
+    },
     {"name": "health", "description": "Liveness check."},
 ]
 
