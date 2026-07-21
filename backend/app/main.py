@@ -39,6 +39,7 @@ _OPENAPI_TAGS = [
         "name": "auth",
         "description": "Login, token refresh, logout, current-user profile, and password change.",
     },
+    {"name": "companies", "description": "Customer/supplier company records (CRUD)."},
     {"name": "health", "description": "Liveness check."},
 ]
 
