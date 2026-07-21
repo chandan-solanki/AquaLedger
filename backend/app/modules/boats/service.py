@@ -120,6 +120,11 @@ class BoatService:
         boat.deleted_by = actor_id
         await self._session.commit()
 
+    async def find_ids_by_name(self, tenant_id: uuid.UUID, q: str) -> list[uuid.UUID]:
+        """Boat ids whose name contains `q` (case-insensitive), for the
+        trips module's boat-name search - see BoatRepository.find_ids_by_name."""
+        return await self._repo.find_ids_by_name(tenant_id, f"%{q.strip()}%")
+
     async def _ensure_company_exists(self, company_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
         try:
             await self._company_service.get(company_id, tenant_id=tenant_id)

@@ -19,7 +19,11 @@
       "Bash(.venv/Scripts/mypy.exe app *)",
       "Bash(.venv/Scripts/mypy.exe app/modules/fish tests)",
       "Bash(.venv/Scripts/pytest.exe -q)",
-      "Bash(.venv/Scripts/pytest.exe --collect-only -q tests/unit/test_fish_exceptions.py tests/unit/test_fish_schemas.py tests/unit/test_fish_service.py tests/integration/test_fish_repository.py tests/integration/test_fish_api.py)"
+      "Bash(.venv/Scripts/pytest.exe --collect-only -q tests/unit/test_fish_exceptions.py tests/unit/test_fish_schemas.py tests/unit/test_fish_service.py tests/integration/test_fish_repository.py tests/integration/test_fish_api.py)",
+      "Bash(grep -n \"^FAILED\\\\|^ERROR\" /tmp/pytest_full.log | head -5; echo \"---first error trace---\"; grep -n \"^_____\\\\|^ERROR at setup\\\\|Error\\\\b\" /tmp/pytest_full.log | head -3; echo \"---\"; awk '/= ERRORS =/{f=1} f' /tmp/pytest_full.log | head -80)",
+      "Read(//tmp/**)",
+      "Skill(update-config)",
+      "Skill(update-config:*)"
     ]
   }
 }
