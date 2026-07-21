@@ -12,7 +12,14 @@
       "Bash(.venv/Scripts/python.exe -m mypy app)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/integration/test_company_api.py -v)",
       "Bash(.venv/Scripts/python.exe -m pytest -q)",
-      "Bash(.venv/Scripts/python.exe -m ruff check .)"
+      "Bash(.venv/Scripts/python.exe -m ruff check .)",
+      "Bash(.venv/Scripts/alembic.exe current *)",
+      "Bash(.venv/Scripts/ruff.exe check *)",
+      "Bash(.venv/Scripts/ruff.exe format *)",
+      "Bash(.venv/Scripts/mypy.exe app *)",
+      "Bash(.venv/Scripts/mypy.exe app/modules/fish tests)",
+      "Bash(.venv/Scripts/pytest.exe -q)",
+      "Bash(.venv/Scripts/pytest.exe --collect-only -q tests/unit/test_fish_exceptions.py tests/unit/test_fish_schemas.py tests/unit/test_fish_service.py tests/integration/test_fish_repository.py tests/integration/test_fish_api.py)"
     ]
   }
 }

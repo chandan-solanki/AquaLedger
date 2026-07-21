@@ -1,70 +1,266 @@
-# Sprint 3 - Company Management
+# Sprint 4 - Fish Management
 
-## Goal
+## Sprint Goal
 
-Build the Company Management module.
+Build the Fish Master module.
 
-This module manages customers, suppliers, and companies that buy or sell fish.
+This module stores all fish master data used throughout the ERP.
 
-No Invoice, Payment, Boat, Trip, Fish, or Reports logic should be implemented.
+No Inventory.
+No Purchase.
+No Sales.
+No Boat Trips.
 
----
-
-## Phase 1
-
-- Create Company module
-- SQLAlchemy Company model
-- Company enums
-- Alembic migration
-- Repository
-- Schemas
+Only the Fish Master.
 
 ---
 
-## Phase 2
+# Session 1 - Database Foundation
 
-CRUD APIs
+## Module Structure
 
-- Create Company
-- Get Company
-- List Companies
-- Update Company
-- Soft Delete Company
+Create:
+
+app/modules/fish/
+
+- [ ] router.py
+- [ ] service.py
+- [ ] repository.py
+- [ ] models.py
+- [ ] schemas.py
+- [ ] dependencies.py
+- [ ] permissions.py
+- [ ] constants.py
+- [ ] exceptions.py
 
 ---
 
-## Phase 3
+## Database Model
+
+Create Fish model.
+
+Fields
+
+- [ ] id (UUID v7)
+- [ ] tenant_id
+- [ ] code
+- [ ] name
+- [ ] local_name
+- [ ] scientific_name
+- [ ] category
+- [ ] unit
+- [ ] default_purchase_rate
+- [ ] default_sale_rate
+- [ ] hsn_code
+- [ ] description
+- [ ] is_active
+- [ ] created_at
+- [ ] updated_at
+- [ ] deleted_at
+- [ ] created_by
+- [ ] updated_by
+- [ ] deleted_by
+
+---
+
+## Constraints
+
+- [ ] Unique code per tenant
+- [ ] Unique name per tenant
+- [ ] Soft Delete
+- [ ] Audit Fields
+- [ ] Alembic Migration
+
+---
+
+## Session Deliverable
+
+- Fish table created
+- Migration completed
+- Repository skeleton
+- Router skeleton
+- Service skeleton
+
+---
+
+# Session 2 - CRUD APIs
+
+Implement
+
+- [ ] Create Fish
+- [ ] Get Fish
+- [ ] List Fish
+- [ ] Update Fish
+- [ ] Delete Fish
+
+Use
+
+- [ ] RBAC
+- [ ] Tenant Isolation
+- [ ] Soft Delete
+- [ ] Audit Fields
+
+---
+
+## Endpoints
+
+POST /api/v1/fish
+
+GET /api/v1/fish
+
+GET /api/v1/fish/{id}
+
+PUT /api/v1/fish/{id}
+
+DELETE /api/v1/fish/{id}
+
+---
+
+# Session 3 - Business Features
+
+Implement
+
+- [ ] Search
+- [ ] Filter
+- [ ] Pagination
+- [ ] Sorting
+- [ ] Duplicate Validation
+
+Search
+
+- Code
+- Name
+- Local Name
+- Scientific Name
+
+Filter
+
+- Category
+- Unit
+- Active Status
+
+Sort
+
+- Name
+- Code
+- Created At
+- Updated At
+
+Pagination
+
+- page
+- page_size
 
 Business Rules
 
-- Unique company name
-- Company type validation
-- Search
-- Pagination
-- Sorting
-- Filtering
+- Code unique per tenant
+- Name unique per tenant
+- Deleted fish hidden
+- Cannot update deleted fish
+- Return HTTP 409 on duplicates
 
 ---
 
-## Phase 4
+# Session 4 - Testing & Documentation
 
 Testing
 
-- Unit Tests
-- API Tests
-- Ruff
-- MyPy
-- Swagger
+- [ ] Unit Tests
+- [ ] Repository Tests
+- [ ] Integration Tests
+- [ ] API Tests
+
+Verify
+
+- CRUD
+- Search
+- Filter
+- Sorting
+- Pagination
+- Duplicate Validation
+- Soft Delete
+- RBAC
+- Tenant Isolation
+
+Documentation
+
+- [ ] Swagger
+- [ ] Example Requests
+- [ ] Example Responses
+
+Quality
+
+- [ ] Ruff
+- [ ] MyPy
+- [ ] Pytest
 
 ---
 
-## Deliverables
+# Sprint Deliverables
 
-- Company CRUD
-- Search
-- Filters
-- Pagination
-- Soft Delete
-- Audit Fields
-- Swagger
-- Tests
+At the end of Sprint 4
+
+✅ Fish Master Module
+
+✅ CRUD APIs
+
+✅ Search
+
+✅ Filter
+
+✅ Pagination
+
+✅ Sorting
+
+✅ Validation
+
+✅ RBAC
+
+✅ Tenant Isolation
+
+✅ Soft Delete
+
+✅ Tests
+
+---
+
+# Definition of Done
+
+- [ ] Database Migration
+- [ ] CRUD APIs
+- [ ] Search
+- [ ] Filtering
+- [ ] Pagination
+- [ ] Sorting
+- [ ] Validation
+- [ ] Duplicate Handling
+- [ ] Tests Passing
+- [ ] Ruff Passing
+- [ ] MyPy Passing
+- [ ] Swagger Updated
+
+---
+
+# Claude Code Instructions
+
+Read
+
+- CLAUDE.md
+- ARCHITECTURE.md
+- TASKS.md
+
+before coding.
+
+Implement only one session at a time.
+
+Explain implementation plan.
+
+Run
+
+- Ruff
+- MyPy
+- Pytest
+
+after every session.
+
+Stop after completing the requested session.
