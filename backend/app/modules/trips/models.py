@@ -13,6 +13,7 @@ from app.modules.trips.constants import ACTIVE_TRIP_STATUSES, TripStatus, TripTy
 if TYPE_CHECKING:
     from app.modules.boats.models import Boat
     from app.modules.trip_catches.models import TripCatch
+    from app.modules.trip_expenses.models import TripExpense
 
 
 class Trip(TimestampMixin, Base):
@@ -54,6 +55,7 @@ class Trip(TimestampMixin, Base):
 
     boat: Mapped["Boat"] = relationship(back_populates="trips")
     trip_catches: Mapped[list["TripCatch"]] = relationship(back_populates="trip")
+    trip_expenses: Mapped[list["TripExpense"]] = relationship(back_populates="trip")
 
     __table_args__ = (
         Index(

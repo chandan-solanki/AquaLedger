@@ -1,23 +1,20 @@
-# Sprint 7 - Trip Catch Management
+# Sprint 8 - Trip Expense Management
 
 ## Sprint Goal
 
-Build the Trip Catch Management module.
+Build the Trip Expense Management module.
 
-A Trip Catch records the fish caught during a fishing trip.
+A Trip Expense records every operational expense incurred during a fishing trip.
 
-Each Trip Catch belongs to:
+Each expense belongs to exactly one Trip.
 
-- One Trip
-- One Fish
-
-This module becomes the inventory source for Sales Invoices.
+Trip Expenses are later used to calculate Trip Profitability.
 
 No Sales.
 No Invoice.
 No Payment.
 
-Only Catch Management.
+Only Expense Management for Trips.
 
 ---
 
@@ -27,7 +24,7 @@ Only Catch Management.
 
 Create:
 
-app/modules/trip_catches/
+app/modules/trip_expenses/
 
 - [ ] router.py
 - [ ] service.py
@@ -43,25 +40,20 @@ app/modules/trip_catches/
 
 ## Database Model
 
-Create TripCatch model.
+Create TripExpense model.
 
 Fields
 
 - [ ] id (UUID v7)
 - [ ] tenant_id
 - [ ] trip_id (FK -> trips.id)
-- [ ] fish_id (FK -> fish.id)
 
-- [ ] grade
-- [ ] quantity_caught
-- [ ] available_quantity
-- [ ] sold_quantity
-- [ ] waste_quantity
-
-- [ ] landing_date
-- [ ] landing_port
-
-- [ ] remarks
+- [ ] expense_type
+- [ ] amount
+- [ ] expense_date
+- [ ] description
+- [ ] vendor_name
+- [ ] receipt_number
 
 - [ ] created_at
 - [ ] updated_at
@@ -73,18 +65,25 @@ Fields
 
 ---
 
-## Grade Enum
+## Expense Types
 
-- [ ] A
-- [ ] B
-- [ ] C
+Enum
+
+- [ ] DIESEL
+- [ ] ICE
+- [ ] FOOD
+- [ ] LABOUR
+- [ ] HARBOUR
+- [ ] MAINTENANCE
+- [ ] REPAIR
+- [ ] PERMIT
+- [ ] OTHER
 
 ---
 
 ## Constraints
 
 - [ ] FK Trip
-- [ ] FK Fish
 - [ ] Audit Fields
 - [ ] Soft Delete
 - [ ] Alembic Migration
@@ -93,12 +92,12 @@ Fields
 
 ## Session Deliverables
 
-- Trip Catch table
-- Relationships
+- Expense table
 - Migration
-- Repository skeleton
-- Router skeleton
-- Service skeleton
+- Relationships
+- Repository Skeleton
+- Service Skeleton
+- Router Skeleton
 
 ---
 
@@ -106,32 +105,31 @@ Fields
 
 Implement
 
-- [ ] Create Catch
-- [ ] Get Catch
-- [ ] List Catches
-- [ ] Update Catch
-- [ ] Delete Catch
+- [ ] Create Expense
+- [ ] Get Expense
+- [ ] List Expenses
+- [ ] Update Expense
+- [ ] Delete Expense
 
 Requirements
 
 - [ ] RBAC
 - [ ] Tenant Isolation
-- [ ] Trip validation
-- [ ] Fish validation
+- [ ] Trip Validation
 - [ ] Soft Delete
 - [ ] Audit Fields
 
 Endpoints
 
-POST /api/v1/trip-catches
+POST /api/v1/trip-expenses
 
-GET /api/v1/trip-catches
+GET /api/v1/trip-expenses
 
-GET /api/v1/trip-catches/{id}
+GET /api/v1/trip-expenses/{id}
 
-PUT /api/v1/trip-catches/{id}
+PUT /api/v1/trip-expenses/{id}
 
-DELETE /api/v1/trip-catches/{id}
+DELETE /api/v1/trip-expenses/{id}
 
 ---
 
@@ -147,34 +145,30 @@ Implement
 
 Search
 
-- Trip Number
-- Fish Name
+- Vendor Name
+- Receipt Number
 
 Filters
 
 - Trip
-- Fish
-- Grade
-- Landing Date
+- Expense Type
+- Expense Date
 
 Sorting
 
-- Landing Date
-- Quantity
+- Expense Date
+- Amount
 - Created At
 
 Business Rules
 
 - [ ] Trip must exist
-- [ ] Fish must exist
-- [ ] Trip must be RETURNED
-- [ ] Boat belongs to tenant
-- [ ] quantity_caught > 0
-- [ ] available_quantity starts equal to quantity_caught
-- [ ] sold_quantity starts at 0
-- [ ] waste_quantity starts at 0
-- [ ] available + sold + waste must always equal quantity_caught
-- [ ] Prevent negative quantities
+- [ ] Trip belongs to tenant
+- [ ] Amount > 0
+- [ ] Expense date cannot be before Trip departure
+- [ ] Expense date cannot be after Trip return
+- [ ] Returned and Cancelled trips cannot be modified if business rules require closure
+- [ ] Prevent duplicate receipt numbers for the same vendor within a trip (optional uniqueness)
 
 ---
 
@@ -195,9 +189,8 @@ Verify
 - Sorting
 - Pagination
 - Trip Validation
-- Fish Validation
-- Quantity Validation
-- Grade Validation
+- Amount Validation
+- Date Validation
 - RBAC
 - Tenant Isolation
 - Soft Delete
@@ -218,9 +211,9 @@ Quality
 
 # Sprint Deliverables
 
-✅ Trip Catch Module
+✅ Trip Expense Module
 
-✅ CRUD
+✅ CRUD APIs
 
 ✅ Search
 
@@ -230,11 +223,7 @@ Quality
 
 ✅ Sorting
 
-✅ Quantity Validation
-
-✅ Trip Validation
-
-✅ Fish Validation
+✅ Validation
 
 ✅ RBAC
 
@@ -270,11 +259,13 @@ Read:
 - ARCHITECTURE.md
 - TASKS.md
 
+before coding.
+
 Implement one session at a time.
 
-Explain the implementation plan first.
+Explain implementation plan before coding.
 
-Run:
+Run
 
 - Ruff
 - MyPy
@@ -282,4 +273,4 @@ Run:
 
 after every session.
 
-Stop after completing the requested session.
+Stop after the requested session.
