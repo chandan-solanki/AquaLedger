@@ -1,13 +1,27 @@
 # AquaLedger
 uv run uvicorn app.main:app --reload
 
-## Completed Modules
+Completed Modules
 
-- ✅ Sprint 1 – Backend Foundation
-- ✅ Sprint 2 – Authentication & Authorization
-- ✅ Sprint 3 – Company Management
-- ✅ Sprint 4 – Fish Management
-- ✅ Sprint 5 – Boat Management
+✅ Foundation
+
+✅ Authentication
+
+✅ Companies
+
+✅ Fish
+
+✅ Boats
+
+✅ Trips
+
+✅ Trip Catch
+
+✅ Trip Expenses
+
+Tests
+
+922 Passing
 
 ## Current Statistics
 

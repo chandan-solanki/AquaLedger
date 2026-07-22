@@ -49,6 +49,14 @@ _OPENAPI_TAGS = [
         "name": "trip-catches",
         "description": "Fish landed on a trip - the inventory source for sales invoices (CRUD).",
     },
+    {
+        "name": "trip-expenses",
+        "description": (
+            "Operational expenses incurred during a fishing trip - CRUD, search, "
+            "filtering, sorting and pagination, with trip-window and cancelled-trip "
+            "business rules enforced server-side."
+        ),
+    },
     {"name": "health", "description": "Liveness check."},
 ]
 

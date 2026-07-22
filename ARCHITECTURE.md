@@ -371,15 +371,17 @@ trip_expenses(id, tenant_id, trip_id, category,  -- fuel|diesel|ice|food|labor|r
               paid_to, payment_method, expense_date, receipt_document_id,
               ...audit)
 
-trip_catches(id, tenant_id, trip_id, fish_id, grade_id NULL,
-             weight_kg NUMERIC(12,3), boxes INT,
-             estimated_rate NUMERIC(12,4),
-             estimated_value NUMERIC(14,2),
-             sold_weight_kg NUMERIC(12,3) DEFAULT 0,   -- rolled up from links
-             realized_value NUMERIC(14,2) DEFAULT 0,
-             wastage_kg NUMERIC(12,3) DEFAULT 0,
+trip_catches(id, tenant_id, trip_id, fish_id, grade CHAR(1) NULL,  -- A|B|C
+             quantity_caught NUMERIC(12,3),
+             available_quantity NUMERIC(12,3) DEFAULT 0,  -- = quantity_caught at creation
+             sold_quantity NUMERIC(12,3) DEFAULT 0,
+             waste_quantity NUMERIC(12,3) DEFAULT 0,
+             landing_date DATE, landing_port, remarks,
              ...audit)
+   CHECK (available_quantity + sold_quantity + waste_quantity = quantity_caught)
 ```
+
+**As built (Sprint 7):** simpler than originally sketched here — a plain `grade` enum rather than a `grade_id` lookup table, and `available_quantity`/`sold_quantity`/`waste_quantity` (DB-enforced summing to `quantity_caught`, updates taken under `SELECT … FOR UPDATE` to close the concurrent-update race) in place of `weight_kg`/`sold_weight_kg`/`wastage_kg`. `boxes`, `estimated_rate`, `estimated_value` and `realized_value` were deferred — the invoicing sprint still needs to decide how `invoice_items.trip_catch_id` (§13.3) debits `available_quantity` / credits `sold_quantity` on issue, and whether estimated/realized value columns are added then. §16's realized-revenue formulas below are the original target design and haven't been reconciled with this simpler interim schema yet.
 
 **Invoicing**
 
@@ -1222,14 +1224,15 @@ Three layers, deliberately duplicated:
 | Invoice | ≥1 line item; `quantity > 0`; `rate ≥ 0`; `discount ≤ subtotal`; `due_date ≥ invoice_date`; `invoice_date` not future, not in a closed period; company must be active; edit only when `draft` |
 | Invoice item | `line_total = round(qty×rate,2) − discount + tax` (DB CHECK); fish active at time of issue |
 | Payment | `amount > 0`; `Σ allocations ≤ amount`; each `allocation ≤ invoice.balance`; `payment_date ≤ today`; cheque requires `reference_number` + `cheque_date` |
-| Trip | `return_at > departure_at`; cannot add expenses to a settled trip; `catch.weight > 0`; `sold_weight ≤ weight` (DB CHECK) |
+| Trip | `return_at > departure_at`; cannot add expenses to a settled trip |
+| Trip Catch | trip must exist, belong to the tenant, and be `RETURNED`; fish must exist and belong to the tenant; `quantity_caught > 0`; `available_quantity = quantity_caught` and `sold_quantity = waste_quantity = 0` at creation; `available_quantity + sold_quantity + waste_quantity = quantity_caught` always (DB CHECK - see §5.2); update takes `SELECT … FOR UPDATE` on the row first so the invariant check can't race a concurrent update |
 | Expense | `amount > 0`; `trip_id` requires `scope='trip'`; date not in a closed period |
 
 **Critical DB constraints**
 ```sql
 CHECK (paid_amount <= total_amount)
 CHECK (allocated_amount <= amount)
-CHECK (sold_weight_kg <= weight_kg)
+CHECK (available_quantity + sold_quantity + waste_quantity = quantity_caught)  -- trip_catches, built Sprint 7
 CHECK (total_amount >= 0)
 CHECK (departure_at < return_at)
 EXCLUDE: no two active boat_crew rows for the same crew_member
