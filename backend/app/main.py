@@ -45,6 +45,10 @@ _OPENAPI_TAGS = [
         "description": "Fishing boat master data, owned by a company (CRUD, search, filters).",
     },
     {"name": "trips", "description": "Fishing/transport trips performed by a boat (CRUD)."},
+    {
+        "name": "trip-catches",
+        "description": "Fish landed on a trip - the inventory source for sales invoices (CRUD).",
+    },
     {"name": "health", "description": "Liveness check."},
 ]
 

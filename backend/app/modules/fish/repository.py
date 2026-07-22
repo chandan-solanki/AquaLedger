@@ -101,3 +101,17 @@ class FishRepository:
         constraint violation) as a single, deliberate step."""
         self._session.add(fish)
         return fish
+
+    async def find_ids_by_name(self, tenant_id: uuid.UUID, pattern: str) -> list[uuid.UUID]:
+        """Fish ids whose name matches `pattern` (a caller-supplied ILIKE
+        pattern), for this tenant. Exists so other modules (trip_catches) can
+        search by fish name without importing the Fish model directly -
+        cross-module access goes through FishService only (ARCHITECTURE.md §2)."""
+        result = await self._session.execute(
+            select(Fish.id).where(
+                Fish.tenant_id == tenant_id,
+                Fish.deleted_at.is_(None),
+                Fish.name.ilike(pattern),
+            )
+        )
+        return list(result.scalars().all())

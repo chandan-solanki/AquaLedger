@@ -156,6 +156,12 @@ class TripService:
         trip.deleted_by = actor_id
         await self._session.commit()
 
+    async def find_ids_by_trip_number(self, tenant_id: uuid.UUID, q: str) -> list[uuid.UUID]:
+        """Trip ids whose trip_number contains `q` (case-insensitive), for
+        the trip_catches module's trip-number search - see
+        TripRepository.find_ids_by_trip_number."""
+        return await self._repo.find_ids_by_trip_number(tenant_id, f"%{q.strip()}%")
+
     async def _get_active_boat_or_raise(
         self, boat_id: uuid.UUID, tenant_id: uuid.UUID
     ) -> BoatResponse:

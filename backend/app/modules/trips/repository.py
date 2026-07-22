@@ -116,3 +116,18 @@ class TripRepository:
         constraint violation) as a single, deliberate step."""
         self._session.add(trip)
         return trip
+
+    async def find_ids_by_trip_number(self, tenant_id: uuid.UUID, pattern: str) -> list[uuid.UUID]:
+        """Trip ids whose trip_number matches `pattern` (a caller-supplied
+        ILIKE pattern), for this tenant. Exists so other modules
+        (trip_catches) can search by trip number without importing the Trip
+        model directly - cross-module access goes through TripService only
+        (ARCHITECTURE.md §2)."""
+        result = await self._session.execute(
+            select(Trip.id).where(
+                Trip.tenant_id == tenant_id,
+                Trip.deleted_at.is_(None),
+                Trip.trip_number.ilike(pattern),
+            )
+        )
+        return list(result.scalars().all())

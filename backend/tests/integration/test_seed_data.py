@@ -41,11 +41,13 @@ class TestSeededRoles:
         # plus boat:create/edit/delete added for super_admin/admin/manager in
         # migration 72d5f6096c81 (Sprint 5 Session 2), plus trip:delete added
         # for super_admin/admin/manager in migration 244f758929a6
-        # (Sprint 6 Session 2).
-        assert counts["super_admin"] == 35
-        assert counts["admin"] == 35
-        assert counts["manager"] == 29
-        assert counts["accountant"] == 20
+        # (Sprint 6 Session 2), plus trip_catch:view/create/edit/delete added
+        # in migration d96d76e5af7a (Sprint 7 Session 2) - view also granted
+        # to accountant, following the trip:view precedent.
+        assert counts["super_admin"] == 39
+        assert counts["admin"] == 39
+        assert counts["manager"] == 33
+        assert counts["accountant"] == 21
         assert counts["operator"] == 3
 
     async def test_operator_is_view_only(self, db_session: AsyncSession) -> None:
@@ -65,11 +67,11 @@ class TestSeededRoles:
 
 
 class TestSeededPermissions:
-    async def test_thirty_five_permissions_seeded(self, db_session: AsyncSession) -> None:
+    async def test_thirty_nine_permissions_seeded(self, db_session: AsyncSession) -> None:
         count = (
             await db_session.execute(select(func.count()).select_from(Permission))
         ).scalar_one()
-        assert count == 35
+        assert count == 39
 
     async def test_permission_codes_are_unique(self, db_session: AsyncSession) -> None:
         codes = (await db_session.execute(select(Permission.code))).scalars().all()

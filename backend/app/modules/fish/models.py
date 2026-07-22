@@ -1,14 +1,18 @@
 import datetime as dt
 import uuid
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid6 import uuid7
 
 from app.db.base import Base, TimestampMixin
 from app.modules.fish.constants import FishUnit
+
+if TYPE_CHECKING:
+    from app.modules.trip_catches.models import TripCatch
 
 
 class Fish(TimestampMixin, Base):
@@ -43,6 +47,8 @@ class Fish(TimestampMixin, Base):
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+
+    trip_catches: Mapped[list["TripCatch"]] = relationship(back_populates="fish")
 
     __table_args__ = (
         Index(
