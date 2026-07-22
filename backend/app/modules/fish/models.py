@@ -12,6 +12,7 @@ from app.db.base import Base, TimestampMixin
 from app.modules.fish.constants import FishUnit
 
 if TYPE_CHECKING:
+    from app.modules.invoices.models import InvoiceItem
     from app.modules.trip_catches.models import TripCatch
 
 
@@ -49,6 +50,7 @@ class Fish(TimestampMixin, Base):
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
 
     trip_catches: Mapped[list["TripCatch"]] = relationship(back_populates="fish")
+    invoice_items: Mapped[list["InvoiceItem"]] = relationship(back_populates="fish")
 
     __table_args__ = (
         Index(

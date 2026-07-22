@@ -3,6 +3,7 @@ import pytest
 from app.core.errors import AppException, BusinessRuleError, NotFoundError
 from app.modules.trip_catches.exceptions import (
     TripCatchFishNotFoundError,
+    TripCatchInsufficientQuantityError,
     TripCatchNotFoundError,
     TripCatchQuantityInvariantError,
     TripCatchTripNotFoundError,
@@ -26,6 +27,12 @@ from app.modules.trip_catches.exceptions import (
             TripCatchQuantityInvariantError,
             422,
             "TRIP_CATCH_QUANTITY_INVARIANT_VIOLATION",
+            BusinessRuleError,
+        ),
+        (
+            TripCatchInsufficientQuantityError,
+            422,
+            "TRIP_CATCH_INSUFFICIENT_QUANTITY",
             BusinessRuleError,
         ),
     ],
@@ -54,7 +61,11 @@ def test_not_found_errors_are_not_business_rule_errors() -> None:
 
 
 def test_business_rule_errors_are_not_not_found_errors() -> None:
-    business_rule_errors = (TripCatchTripNotReturnedError, TripCatchQuantityInvariantError)
+    business_rule_errors = (
+        TripCatchTripNotReturnedError,
+        TripCatchQuantityInvariantError,
+        TripCatchInsufficientQuantityError,
+    )
     for exc_cls in business_rule_errors:
         assert not issubclass(exc_cls, NotFoundError)
 
@@ -73,5 +84,6 @@ def test_all_trip_catch_error_codes_are_distinct() -> None:
         TripCatchFishNotFoundError("x").code,
         TripCatchTripNotReturnedError("x").code,
         TripCatchQuantityInvariantError("x").code,
+        TripCatchInsufficientQuantityError("x").code,
     }
-    assert len(codes) == 5
+    assert len(codes) == 6

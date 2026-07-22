@@ -9,6 +9,8 @@ from app.core.errors import ConflictError
 from app.modules.fish.exceptions import FishNotFoundError
 from app.modules.trip_catches.exceptions import (
     TripCatchFishNotFoundError,
+    TripCatchInsufficientQuantityError,
+    TripCatchNotFoundError,
     TripCatchQuantityInvariantError,
     TripCatchTripNotFoundError,
     TripCatchTripNotReturnedError,
@@ -50,10 +52,18 @@ class _FakeTripCatchRepo:
         self.rows = rows or []
         self.total = total
         self.last_search_call: dict[str, Any] | None = None
+        self.locked_row: TripCatch | None = None
+        self.get_for_update_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
 
     async def search(self, tenant_id: uuid.UUID, **kwargs: Any) -> tuple[list[TripCatch], int]:
         self.last_search_call = {"tenant_id": tenant_id, **kwargs}
         return self.rows, self.total
+
+    async def get_by_id_for_update(
+        self, trip_catch_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> TripCatch | None:
+        self.get_for_update_calls.append((trip_catch_id, tenant_id))
+        return self.locked_row
 
 
 class _TripStub:
@@ -199,9 +209,7 @@ class TestEnsureTripReturned:
     @pytest.mark.parametrize(
         "status", [TripStatus.PLANNED, TripStatus.DEPARTED, TripStatus.CANCELLED]
     )
-    async def test_raises_not_returned_for_non_returned_statuses(
-        self, status: TripStatus
-    ) -> None:
+    async def test_raises_not_returned_for_non_returned_statuses(self, status: TripStatus) -> None:
         trip = _TripStub(status=status)
         service, _, _, _ = _service_with_fakes(trip=trip)
 
@@ -345,9 +353,7 @@ class TestListCatchesPaginationMath:
     async def test_q_triggers_trip_and_fish_lookup_and_forwards_ids(self) -> None:
         matched_trip_id = uuid.uuid4()
         matched_fish_id = uuid.uuid4()
-        service, fake_repo, fake_trip_service, fake_fish_service = _service_with_fakes(
-            [], total=0
-        )
+        service, fake_repo, fake_trip_service, fake_fish_service = _service_with_fakes([], total=0)
         fake_trip_service.find_ids_result = [matched_trip_id]
         fake_fish_service.find_ids_result = [matched_fish_id]
         tenant_id = uuid.uuid4()
@@ -361,9 +367,7 @@ class TestListCatchesPaginationMath:
         assert fake_repo.last_search_call["q_fish_ids"] == [matched_fish_id]
 
     async def test_blank_q_does_not_trigger_lookups(self) -> None:
-        service, fake_repo, fake_trip_service, fake_fish_service = _service_with_fakes(
-            [], total=0
-        )
+        service, fake_repo, fake_trip_service, fake_fish_service = _service_with_fakes([], total=0)
 
         await service.list_catches(tenant_id=uuid.uuid4(), params=TripCatchListParams(q="   "))
 
@@ -372,6 +376,76 @@ class TestListCatchesPaginationMath:
         assert fake_repo.last_search_call is not None
         assert fake_repo.last_search_call["q_trip_ids"] is None
         assert fake_repo.last_search_call["q_fish_ids"] is None
+
+
+class TestDeductAvailableQuantity:
+    """TripCatchService.deduct_available_quantity - the inventory-deduction
+    half of Sprint 9 Session 5's invoice issue workflow."""
+
+    async def test_deducts_from_available_and_credits_sold(self) -> None:
+        trip_catch = _make_trip_catch(
+            available_quantity=Decimal("100.000"), sold_quantity=Decimal("0.000")
+        )
+        service, fake_repo, _, _ = _service_with_fakes()
+        fake_repo.locked_row = trip_catch
+        actor_id = uuid.uuid4()
+
+        result = await service.deduct_available_quantity(
+            trip_catch.id, Decimal("30.000"), tenant_id=trip_catch.tenant_id, actor_id=actor_id
+        )
+
+        assert trip_catch.available_quantity == Decimal("70.000")
+        assert trip_catch.sold_quantity == Decimal("30.000")
+        assert trip_catch.updated_by == actor_id
+        assert result.available_quantity == Decimal("70.000")
+
+    async def test_deducting_exactly_the_available_quantity_is_allowed(self) -> None:
+        trip_catch = _make_trip_catch(available_quantity=Decimal("50.000"))
+        service, fake_repo, _, _ = _service_with_fakes()
+        fake_repo.locked_row = trip_catch
+
+        await service.deduct_available_quantity(
+            trip_catch.id, Decimal("50.000"), tenant_id=trip_catch.tenant_id, actor_id=uuid.uuid4()
+        )
+
+        assert trip_catch.available_quantity == Decimal("0.000")
+
+    async def test_raises_insufficient_quantity_when_over_the_limit(self) -> None:
+        trip_catch = _make_trip_catch(available_quantity=Decimal("10.000"))
+        service, fake_repo, _, _ = _service_with_fakes()
+        fake_repo.locked_row = trip_catch
+
+        with pytest.raises(TripCatchInsufficientQuantityError):
+            await service.deduct_available_quantity(
+                trip_catch.id,
+                Decimal("10.001"),
+                tenant_id=trip_catch.tenant_id,
+                actor_id=uuid.uuid4(),
+            )
+        # Never left partially mutated on rejection.
+        assert trip_catch.available_quantity == Decimal("10.000")
+        assert trip_catch.sold_quantity == Decimal("0.000")
+
+    async def test_raises_not_found_when_trip_catch_missing(self) -> None:
+        service, fake_repo, _, _ = _service_with_fakes()
+        fake_repo.locked_row = None
+
+        with pytest.raises(TripCatchNotFoundError):
+            await service.deduct_available_quantity(
+                uuid.uuid4(), Decimal("1.000"), tenant_id=uuid.uuid4(), actor_id=uuid.uuid4()
+            )
+
+    async def test_lookup_is_scoped_to_tenant_via_for_update_lock(self) -> None:
+        trip_catch = _make_trip_catch()
+        service, fake_repo, _, _ = _service_with_fakes()
+        fake_repo.locked_row = trip_catch
+        tenant_id = uuid.uuid4()
+
+        await service.deduct_available_quantity(
+            trip_catch.id, Decimal("1.000"), tenant_id=tenant_id, actor_id=uuid.uuid4()
+        )
+
+        assert fake_repo.get_for_update_calls == [(trip_catch.id, tenant_id)]
 
 
 def test_make_trip_catch_helper_produces_a_response_compatible_row() -> None:

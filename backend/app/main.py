@@ -57,6 +57,14 @@ _OPENAPI_TAGS = [
             "business rules enforced server-side."
         ),
     },
+    {
+        "name": "invoices",
+        "description": (
+            "Sales invoices billed to a company - draft creation, line items, server-side "
+            "financial calculation, and the issue workflow that assigns a permanent number "
+            "and makes the invoice immutable."
+        ),
+    },
     {"name": "health", "description": "Liveness check."},
 ]
 

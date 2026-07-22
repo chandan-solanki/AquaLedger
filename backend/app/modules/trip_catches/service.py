@@ -12,6 +12,7 @@ from app.modules.fish.exceptions import FishNotFoundError
 from app.modules.fish.service import FishService
 from app.modules.trip_catches.exceptions import (
     TripCatchFishNotFoundError,
+    TripCatchInsufficientQuantityError,
     TripCatchNotFoundError,
     TripCatchQuantityInvariantError,
     TripCatchTripNotFoundError,
@@ -168,6 +169,38 @@ class TripCatchService:
         trip_catch.deleted_at = datetime.now(UTC)
         trip_catch.deleted_by = actor_id
         await self._session.commit()
+
+    async def deduct_available_quantity(
+        self,
+        trip_catch_id: uuid.UUID,
+        quantity: Decimal,
+        *,
+        tenant_id: uuid.UUID,
+        actor_id: uuid.UUID,
+    ) -> TripCatchResponse:
+        """Locks the trip catch row (`SELECT ... FOR UPDATE`) and moves
+        `quantity` from available_quantity to sold_quantity - the inventory-
+        deduction half of Sprint 9 Session 5's invoice issue workflow
+        (ARCHITECTURE.md §13.3). Never allows available_quantity to go
+        negative: raises TripCatchInsufficientQuantityError instead, checked
+        against the value read under lock (not a stale prior read), so this
+        is safe against two invoices concurrently issuing against the same
+        trip catch.
+
+        The caller (InvoiceService.issue) owns the transaction and commits;
+        this method only mutates and returns the updated row, the same FOR
+        UPDATE pattern update() uses but without a commit - the deduction
+        must land atomically with the rest of the issue transaction
+        (invoice number, status, company outstanding_amount)."""
+        trip_catch = await self._get_or_raise_for_update(trip_catch_id, tenant_id)
+        if quantity > trip_catch.available_quantity:
+            raise TripCatchInsufficientQuantityError(
+                "Quantity exceeds the trip catch's available quantity"
+            )
+        trip_catch.available_quantity -= quantity
+        trip_catch.sold_quantity += quantity
+        trip_catch.updated_by = actor_id
+        return self._to_response(trip_catch)
 
     async def _ensure_trip_returned(self, trip_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
         try:

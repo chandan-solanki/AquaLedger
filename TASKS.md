@@ -1,276 +1,245 @@
-# Sprint 8 - Trip Expense Management
+Here is the structured and formatted version of your sprint plan:
 
-## Sprint Goal
+Sprint 9 — Invoice Management
+Goal: Build the complete Invoice Management module. Invoices are the core financial document of FishERP.
 
-Build the Trip Expense Management module.
+This sprint introduces:
 
-A Trip Expense records every operational expense incurred during a fishing trip.
+Draft invoices
 
-Each expense belongs to exactly one Trip.
+Invoice items
 
-Trip Expenses are later used to calculate Trip Profitability.
+Financial calculations
 
-No Sales.
-No Invoice.
-No Payment.
+Invoice issue workflow
 
-Only Expense Management for Trips.
+Inventory deduction
 
----
+Invoice numbering
 
-# Session 1 - Database Foundation
+Immutable invoices
 
-## Module Structure
+This module will integrate with:
 
-Create:
+Company
 
-app/modules/trip_expenses/
+Fish
 
-- [ ] router.py
-- [ ] service.py
-- [ ] repository.py
-- [ ] models.py
-- [ ] schemas.py
-- [ ] dependencies.py
-- [ ] permissions.py
-- [ ] constants.py
-- [ ] exceptions.py
+Trip Catch
 
----
+Future Payment module
 
-## Database Model
+Future Ledger module
 
-Create TripExpense model.
+Session 1 — Module Foundation
+Objective: Create the entire Invoice module structure.
 
-Fields
+1. Create Module Structure (modules/invoices/)
 
-- [ ] id (UUID v7)
-- [ ] tenant_id
-- [ ] trip_id (FK -> trips.id)
+__init__.py
 
-- [ ] expense_type
-- [ ] amount
-- [ ] expense_date
-- [ ] description
-- [ ] vendor_name
-- [ ] receipt_number
+router.py
 
-- [ ] created_at
-- [ ] updated_at
-- [ ] deleted_at
+service.py
 
-- [ ] created_by
-- [ ] updated_by
-- [ ] deleted_by
+repository.py
 
----
+models.py
 
-## Expense Types
+schemas.py
 
-Enum
+exceptions.py
 
-- [ ] DIESEL
-- [ ] ICE
-- [ ] FOOD
-- [ ] LABOUR
-- [ ] HARBOUR
-- [ ] MAINTENANCE
-- [ ] REPAIR
-- [ ] PERMIT
-- [ ] OTHER
+constants.py
 
----
+permissions.py
 
-## Constraints
+dependencies.py
 
-- [ ] FK Trip
-- [ ] Audit Fields
-- [ ] Soft Delete
-- [ ] Alembic Migration
+2. Database Tables
+invoices
 
----
+Core Fields: id, tenant_id, invoice_number, company_id, invoice_date, due_date
 
-## Session Deliverables
+Status Options: Draft, Issued, Paid, Partially Paid, Cancelled
 
-- Expense table
-- Migration
-- Relationships
-- Repository Skeleton
-- Service Skeleton
-- Router Skeleton
+Financial Fields: subtotal, discount_amount, taxable_amount, tax_amount, transport_charge, other_charge, round_off, total_amount, paid_amount, balance_amount
 
----
+Metadata: Audit fields, Soft delete
 
-# Session 2 - CRUD APIs
+invoice_items
 
-Implement
+Fields: id, tenant_id, invoice_id, fish_id, trip_catch_id, description, quantity, unit, rate, discount_percent, discount_amount, taxable_amount, tax_rate, tax_amount, line_total
 
-- [ ] Create Expense
-- [ ] Get Expense
-- [ ] List Expenses
-- [ ] Update Expense
-- [ ] Delete Expense
+3. Implementation Checklist
 
-Requirements
+Create Models, Schemas, Exceptions, Constants, Permissions, Dependencies, and Migration.
 
-- [ ] RBAC
-- [ ] Tenant Isolation
-- [ ] Trip Validation
-- [ ] Soft Delete
-- [ ] Audit Fields
+Setup Indexes, Foreign Keys, Relationships, and Swagger Tags.
 
-Endpoints
+4. Verify
 
-POST /api/v1/trip-expenses
+Migration works and tables are created.
 
-GET /api/v1/trip-expenses
+Code is MyPy clean and Ruff clean.
 
-GET /api/v1/trip-expenses/{id}
+Session 2 — CRUD
+Objective: Implement standard operations across the Repository, Service, and Router.
 
-PUT /api/v1/trip-expenses/{id}
+1. CRUD Operations
 
-DELETE /api/v1/trip-expenses/{id}
+Create Draft Invoice
 
----
+Update Draft
 
-# Session 3 - Business Features
+Delete Draft
 
-Implement
+Get Invoice
 
-- [ ] Search
-- [ ] Filtering
-- [ ] Sorting
-- [ ] Pagination
-- [ ] Business Rules
+List Invoices
 
-Search
+2. Query Features
 
-- Vendor Name
-- Receipt Number
+Search: invoice_number, company
 
-Filters
+Filters: status, company, date_range
 
-- Trip
-- Expense Type
-- Expense Date
+Sorting: invoice_date, invoice_number, total, created_at
 
-Sorting
+Pagination: page, page_size
 
-- Expense Date
-- Amount
-- Created At
+3. RBAC Permissions
 
-Business Rules
+invoice:view
 
-- [ ] Trip must exist
-- [ ] Trip belongs to tenant
-- [ ] Amount > 0
-- [ ] Expense date cannot be before Trip departure
-- [ ] Expense date cannot be after Trip return
-- [ ] Returned and Cancelled trips cannot be modified if business rules require closure
-- [ ] Prevent duplicate receipt numbers for the same vendor within a trip (optional uniqueness)
+invoice:create
 
----
+invoice:edit
 
-# Session 4 - Testing & Documentation
+invoice:delete
 
-Testing
+4. Verify
 
-- [ ] Unit Tests
-- [ ] Repository Tests
-- [ ] Integration Tests
-- [ ] API Tests
+CRUD, Search, Pagination, Filtering, Sorting, RBAC, Tenant Isolation, and Soft Delete functionality.
 
-Verify
+Session 3 — Invoice Items
+Objective: Implement invoice_items lifecycle and validation.
 
-- CRUD
-- Search
-- Filtering
-- Sorting
-- Pagination
-- Trip Validation
-- Amount Validation
-- Date Validation
-- RBAC
-- Tenant Isolation
-- Soft Delete
+1. CRUD Operations
 
-Documentation
+Add Item, Edit Item, Delete Item, List Items
 
-- [ ] Swagger
-- [ ] Example Requests
-- [ ] Example Responses
+2. Validation Rules
 
-Quality
+Fish exists.
 
-- [ ] Ruff
-- [ ] MyPy
-- [ ] Pytest
+Trip Catch exists and belongs to the tenant.
 
----
+Quantity > 0 and Rate ≥ 0.
 
-# Sprint Deliverables
+Validate discounts and taxes.
 
-✅ Trip Expense Module
+Inventory: Quantity cannot exceed Trip Catch available quantity.
 
-✅ CRUD APIs
+3. Service Rules
 
-✅ Search
+Must use FishService and TripCatchService (never directly access repositories).
 
-✅ Filtering
+4. Verify
 
-✅ Pagination
+Item CRUD, Trip Catch/Fish validation, Inventory validation, RBAC, and Tenant isolation.
 
-✅ Sorting
+Session 4 — Financial Engine
+Objective: Server calculates everything. Ignore client totals.
 
-✅ Validation
+1. Rules
 
-✅ RBAC
+Use decimals only (never floats).
 
-✅ Tenant Isolation
+Recalculate on every update.
 
-✅ Soft Delete
+Reject negative values.
 
-✅ Tests
+2. Calculate
 
----
+Line subtotal and Line discount
 
-# Definition of Done
+Taxable amount (GST, CGST, SGST, IGST)
 
-- [ ] Migration
-- [ ] CRUD APIs
-- [ ] Search
-- [ ] Filtering
-- [ ] Pagination
-- [ ] Sorting
-- [ ] Business Rules
-- [ ] Tests Passing
-- [ ] Ruff Passing
-- [ ] MyPy Passing
-- [ ] Swagger Updated
+Transport and Other Charges
 
----
+Round Off
 
-# Claude Code Instructions
+Invoice Total, Balance, and Paid Amount
 
-Read:
+3. Verify
 
-- CLAUDE.md
-- ARCHITECTURE.md
-- TASKS.md
+Calculation accuracy, decimal precision, negative value rejection, rounding, and financial totals.
 
-before coding.
+Session 5 — Issue Workflow
+Objective: Execute the core invoice issuance logic. (Most important session)
 
-Implement one session at a time.
+Endpoint: POST /invoices/{id}/issue
 
-Explain implementation plan before coding.
+1. Workflow Pipeline
+Draft → Validate → Generate Number → Lock Invoice → Calculate Totals → Deduct Trip Catch Quantity → Update Balance → Issued → Immutable
 
-Run
+2. Business Rules
 
-- Ruff
-- MyPy
-- Pytest
+Cannot issue twice.
 
-after every session.
+Cannot edit or delete an issued invoice.
 
-Stop after the requested session.
+Must contain at least one item.
+
+Company must be active.
+
+Trip Catch quantity must be available.
+
+3. Future Proofing (Prepare Hooks)
+
+Future Payment, Future Ledger, Future PDF, Future Outbox (No implementation yet).
+
+4. Verify
+
+Issue endpoint, concurrency, Invoice Number generation, inventory deduction, immutability, and integrity errors.
+
+Session 6 — Testing & Documentation
+1. Testing Scope
+
+Unit Tests: Exceptions, Schemas, Financial calculations, Service logic.
+
+Integration Tests: Repository, Issue workflow, Invoice Items.
+
+API Tests: CRUD, Issue endpoint, RBAC, Search, Pagination, Filtering, Tenant Isolation, Soft Delete, Immutable invoice rules, Inventory deduction.
+
+2. Documentation & Review
+
+Swagger: Add examples, expected responses, and error documentation.
+
+Architecture Review: Check layering, security, performance, test coverage, and identify future improvements.
+
+Definition of Done
+The sprint is complete only if:
+
+[ ] Ruff clean
+
+[ ] MyPy strict clean
+
+[ ] All tests pass
+
+[ ] Alembic migration successful
+
+[ ] Swagger updated
+
+[ ] RBAC implemented
+
+[ ] Tenant isolation verified
+
+[ ] Soft delete verified
+
+[ ] Financial calculations verified
+
+[ ] Invoice issue workflow verified
+
+[ ] Code matches project architecture
