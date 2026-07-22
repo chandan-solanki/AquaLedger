@@ -12,6 +12,7 @@ from app.modules.trips.constants import ACTIVE_TRIP_STATUSES, TripStatus, TripTy
 
 if TYPE_CHECKING:
     from app.modules.boats.models import Boat
+    from app.modules.trip_catches.models import TripCatch
 
 
 class Trip(TimestampMixin, Base):
@@ -52,6 +53,7 @@ class Trip(TimestampMixin, Base):
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
 
     boat: Mapped["Boat"] = relationship(back_populates="trips")
+    trip_catches: Mapped[list["TripCatch"]] = relationship(back_populates="trip")
 
     __table_args__ = (
         Index(

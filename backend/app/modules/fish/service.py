@@ -103,6 +103,11 @@ class FishService:
         fish.deleted_by = actor_id
         await self._session.commit()
 
+    async def find_ids_by_name(self, tenant_id: uuid.UUID, q: str) -> list[uuid.UUID]:
+        """Fish ids whose name contains `q` (case-insensitive), for the
+        trip_catches module's fish-name search - see FishRepository.find_ids_by_name."""
+        return await self._repo.find_ids_by_name(tenant_id, f"%{q.strip()}%")
+
     async def _get_or_raise(self, fish_id: uuid.UUID, tenant_id: uuid.UUID) -> Fish:
         fish = await self._repo.get_by_id(fish_id, tenant_id)
         if fish is None:

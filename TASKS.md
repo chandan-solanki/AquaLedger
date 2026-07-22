@@ -1,19 +1,23 @@
-# Sprint 6 - Trip Management
+# Sprint 7 - Trip Catch Management
 
 ## Sprint Goal
 
-Build the Trip Management module.
+Build the Trip Catch Management module.
 
-A Trip represents one fishing journey performed by a boat.
+A Trip Catch records the fish caught during a fishing trip.
 
-A Trip belongs to one Boat.
+Each Trip Catch belongs to:
 
-No Catch Management.
-No Trip Expenses.
+- One Trip
+- One Fish
+
+This module becomes the inventory source for Sales Invoices.
+
+No Sales.
 No Invoice.
 No Payment.
 
-Only Trip Management.
+Only Catch Management.
 
 ---
 
@@ -23,7 +27,7 @@ Only Trip Management.
 
 Create:
 
-app/modules/trips/
+app/modules/trip_catches/
 
 - [ ] router.py
 - [ ] service.py
@@ -39,65 +43,58 @@ app/modules/trips/
 
 ## Database Model
 
-Create Trip model.
+Create TripCatch model.
 
 Fields
 
 - [ ] id (UUID v7)
 - [ ] tenant_id
-- [ ] boat_id (FK -> boats.id)
-- [ ] trip_number
-- [ ] trip_type
-- [ ] captain_name
-- [ ] departure_port
-- [ ] arrival_port
-- [ ] departure_datetime
-- [ ] expected_return_datetime
-- [ ] actual_return_datetime
-- [ ] status
-- [ ] notes
-- [ ] is_active
+- [ ] trip_id (FK -> trips.id)
+- [ ] fish_id (FK -> fish.id)
+
+- [ ] grade
+- [ ] quantity_caught
+- [ ] available_quantity
+- [ ] sold_quantity
+- [ ] waste_quantity
+
+- [ ] landing_date
+- [ ] landing_port
+
+- [ ] remarks
+
 - [ ] created_at
 - [ ] updated_at
 - [ ] deleted_at
+
 - [ ] created_by
 - [ ] updated_by
 - [ ] deleted_by
 
 ---
 
-## Enums
+## Grade Enum
 
-Trip Status
-
-- [ ] PLANNED
-- [ ] DEPARTED
-- [ ] RETURNED
-- [ ] CANCELLED
-
-Trip Type
-
-- [ ] FISHING
-- [ ] TRANSPORT
-- [ ] MAINTENANCE
-- [ ] OTHER
+- [ ] A
+- [ ] B
+- [ ] C
 
 ---
 
 ## Constraints
 
-- [ ] Unique trip_number per tenant
-- [ ] FK to Boat
-- [ ] Soft Delete
+- [ ] FK Trip
+- [ ] FK Fish
 - [ ] Audit Fields
+- [ ] Soft Delete
 - [ ] Alembic Migration
 
 ---
 
 ## Session Deliverables
 
-- Trip table
-- Relationship with Boat
+- Trip Catch table
+- Relationships
 - Migration
 - Repository skeleton
 - Router skeleton
@@ -109,31 +106,32 @@ Trip Type
 
 Implement
 
-- [ ] Create Trip
-- [ ] Get Trip
-- [ ] List Trips
-- [ ] Update Trip
-- [ ] Delete Trip
+- [ ] Create Catch
+- [ ] Get Catch
+- [ ] List Catches
+- [ ] Update Catch
+- [ ] Delete Catch
 
 Requirements
 
 - [ ] RBAC
 - [ ] Tenant Isolation
+- [ ] Trip validation
+- [ ] Fish validation
 - [ ] Soft Delete
 - [ ] Audit Fields
-- [ ] Boat validation
 
 Endpoints
 
-POST /api/v1/trips
+POST /api/v1/trip-catches
 
-GET /api/v1/trips
+GET /api/v1/trip-catches
 
-GET /api/v1/trips/{id}
+GET /api/v1/trip-catches/{id}
 
-PUT /api/v1/trips/{id}
+PUT /api/v1/trip-catches/{id}
 
-DELETE /api/v1/trips/{id}
+DELETE /api/v1/trip-catches/{id}
 
 ---
 
@@ -143,42 +141,40 @@ Implement
 
 - [ ] Search
 - [ ] Filtering
-- [ ] Pagination
 - [ ] Sorting
-- [ ] Duplicate Validation
+- [ ] Pagination
 - [ ] Business Rules
 
 Search
 
 - Trip Number
-- Boat Name
-- Captain Name
+- Fish Name
 
 Filters
 
-- Boat
-- Trip Status
-- Trip Type
-- Departure Date
-- Return Date
+- Trip
+- Fish
+- Grade
+- Landing Date
 
 Sorting
 
-- Trip Number
-- Departure Date
+- Landing Date
+- Quantity
 - Created At
-- Updated At
 
 Business Rules
 
-- [ ] Boat must exist
-- [ ] Boat must be active
-- [ ] Boat must belong to current tenant
-- [ ] Boat cannot have more than one active trip
-- [ ] Actual return cannot be before departure
-- [ ] Returned trips cannot change boat
-- [ ] Deleted trips hidden
-- [ ] Return HTTP 409 on duplicates
+- [ ] Trip must exist
+- [ ] Fish must exist
+- [ ] Trip must be RETURNED
+- [ ] Boat belongs to tenant
+- [ ] quantity_caught > 0
+- [ ] available_quantity starts equal to quantity_caught
+- [ ] sold_quantity starts at 0
+- [ ] waste_quantity starts at 0
+- [ ] available + sold + waste must always equal quantity_caught
+- [ ] Prevent negative quantities
 
 ---
 
@@ -198,9 +194,10 @@ Verify
 - Filtering
 - Sorting
 - Pagination
-- Duplicate Validation
-- Boat Validation
-- Active Trip Validation
+- Trip Validation
+- Fish Validation
+- Quantity Validation
+- Grade Validation
 - RBAC
 - Tenant Isolation
 - Soft Delete
@@ -221,7 +218,7 @@ Quality
 
 # Sprint Deliverables
 
-✅ Trip Management
+✅ Trip Catch Module
 
 ✅ CRUD
 
@@ -233,11 +230,11 @@ Quality
 
 ✅ Sorting
 
-✅ Validation
+✅ Quantity Validation
 
-✅ Boat Relationship
+✅ Trip Validation
 
-✅ Active Trip Validation
+✅ Fish Validation
 
 ✅ RBAC
 
@@ -252,15 +249,12 @@ Quality
 # Definition of Done
 
 - [ ] Migration
-- [ ] CRUD
+- [ ] CRUD APIs
 - [ ] Search
 - [ ] Filtering
 - [ ] Pagination
 - [ ] Sorting
-- [ ] Validation
-- [ ] Duplicate Validation
-- [ ] Boat Validation
-- [ ] Active Trip Validation
+- [ ] Business Rules
 - [ ] Tests Passing
 - [ ] Ruff Passing
 - [ ] MyPy Passing
@@ -270,19 +264,17 @@ Quality
 
 # Claude Code Instructions
 
-Read
+Read:
 
 - CLAUDE.md
 - ARCHITECTURE.md
 - TASKS.md
 
-before coding.
-
 Implement one session at a time.
 
 Explain the implementation plan first.
 
-Run
+Run:
 
 - Ruff
 - MyPy
