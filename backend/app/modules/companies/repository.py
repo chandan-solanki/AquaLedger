@@ -1,7 +1,8 @@
 import uuid
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.companies.constants import CompanyStatus, CompanyType
@@ -83,14 +84,18 @@ class CompanyRepository:
         order = column.desc() if sort.startswith("-") else column.asc()
 
         rows = (
-            await self._session.execute(
-                select(Company)
-                .where(*conditions)
-                .order_by(order, Company.id)
-                .offset((page - 1) * page_size)
-                .limit(page_size)
+            (
+                await self._session.execute(
+                    select(Company)
+                    .where(*conditions)
+                    .order_by(order, Company.id)
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return list(rows), total
 
     async def add(self, company: Company) -> Company:
@@ -99,3 +104,33 @@ class CompanyRepository:
         constraint violation) as a single, deliberate step."""
         self._session.add(company)
         return company
+
+    async def increase_outstanding_amount(
+        self, company_id: uuid.UUID, tenant_id: uuid.UUID, amount: Decimal
+    ) -> None:
+        """Atomic `outstanding_amount = outstanding_amount + amount` via a
+        single UPDATE expression, not a SELECT-then-write - Postgres applies
+        the UPDATE atomically, so no separate row lock is needed here
+        (unlike TripCatch's available_quantity deduction, there's no prior
+        business-rule check that requires reading a committed value first).
+        Used by CompanyService.increase_outstanding for the Sprint 9 Session
+        5 issue workflow (ARCHITECTURE.md §13.3)."""
+        await self._session.execute(
+            update(Company)
+            .where(Company.id == company_id, Company.tenant_id == tenant_id)
+            .values(outstanding_amount=Company.outstanding_amount + amount)
+        )
+
+    async def find_ids_by_name(self, tenant_id: uuid.UUID, pattern: str) -> list[uuid.UUID]:
+        """Company ids whose name matches `pattern` (a caller-supplied ILIKE
+        pattern), for this tenant. Exists so other modules (invoices) can
+        search by company name without importing the Company model directly -
+        cross-module access goes through CompanyService only (ARCHITECTURE.md §2)."""
+        result = await self._session.execute(
+            select(Company.id).where(
+                Company.tenant_id == tenant_id,
+                Company.deleted_at.is_(None),
+                Company.name.ilike(pattern),
+            )
+        )
+        return list(result.scalars().all())

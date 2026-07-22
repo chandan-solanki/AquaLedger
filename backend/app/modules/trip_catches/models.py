@@ -13,6 +13,7 @@ from app.modules.trip_catches.constants import CatchGrade
 
 if TYPE_CHECKING:
     from app.modules.fish.models import Fish
+    from app.modules.invoices.models import InvoiceItem
     from app.modules.trips.models import Trip
 
 
@@ -61,6 +62,7 @@ class TripCatch(TimestampMixin, Base):
 
     trip: Mapped["Trip"] = relationship(back_populates="trip_catches")
     fish: Mapped["Fish"] = relationship(back_populates="trip_catches")
+    invoice_items: Mapped[list["InvoiceItem"]] = relationship(back_populates="trip_catch")
 
     __table_args__ = (
         Index("ix_trip_catches_tenant", "tenant_id", postgresql_where=deleted_at.is_(None)),

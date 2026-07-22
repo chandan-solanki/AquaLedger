@@ -1,6 +1,7 @@
 import math
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -118,6 +119,22 @@ class CompanyService:
         company.deleted_at = datetime.now(UTC)
         company.deleted_by = actor_id
         await self._session.commit()
+
+    async def find_ids_by_name(self, tenant_id: uuid.UUID, q: str) -> list[uuid.UUID]:
+        """Company ids whose name contains `q` (case-insensitive), for the
+        invoices module's company-name search - see
+        CompanyRepository.find_ids_by_name."""
+        return await self._repo.find_ids_by_name(tenant_id, f"%{q.strip()}%")
+
+    async def increase_outstanding(
+        self, company_id: uuid.UUID, amount: Decimal, *, tenant_id: uuid.UUID
+    ) -> None:
+        """Adds `amount` to the company's outstanding_amount - the Sprint 9
+        Session 5 issue workflow's "Update Company outstanding_amount" step
+        (ARCHITECTURE.md §13.3). The caller (InvoiceService.issue) owns the
+        transaction and commits; this only stages the write, same as every
+        other cross-module mutation in this codebase."""
+        await self._repo.increase_outstanding_amount(company_id, tenant_id, amount)
 
     async def _get_or_raise(self, company_id: uuid.UUID, tenant_id: uuid.UUID) -> Company:
         company = await self._repo.get_by_id(company_id, tenant_id)

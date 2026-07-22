@@ -41,10 +41,16 @@ class _FakeRepo:
         self.rows = rows
         self.total = total
         self.last_call: dict[str, Any] | None = None
+        self.increase_calls: list[tuple[uuid.UUID, uuid.UUID, Decimal]] = []
 
     async def search(self, tenant_id: uuid.UUID, **kwargs: Any) -> tuple[list[Company], int]:
         self.last_call = {"tenant_id": tenant_id, **kwargs}
         return self.rows, self.total
+
+    async def increase_outstanding_amount(
+        self, company_id: uuid.UUID, tenant_id: uuid.UUID, amount: Decimal
+    ) -> None:
+        self.increase_calls.append((company_id, tenant_id, amount))
 
 
 def _make_company(**overrides: Any) -> Company:
@@ -149,8 +155,14 @@ class TestListCompaniesPaginationMath:
         await service.list_companies(
             tenant_id=tenant_id,
             params=CompanyListParams(
-                q="ocean", company_type=CompanyType.SUPPLIER, status=CompanyStatus.INACTIVE,
-                city="Mumbai", state="Maharashtra", sort="-name", page=2, page_size=10,
+                q="ocean",
+                company_type=CompanyType.SUPPLIER,
+                status=CompanyStatus.INACTIVE,
+                city="Mumbai",
+                state="Maharashtra",
+                sort="-name",
+                page=2,
+                page_size=10,
             ),
         )
 
@@ -165,3 +177,18 @@ class TestListCompaniesPaginationMath:
             "page": 2,
             "page_size": 10,
         }
+
+
+class TestIncreaseOutstanding:
+    """CompanyService.increase_outstanding - used by InvoiceService.issue
+    (Sprint 9 Session 5) to credit the billed company's outstanding_amount
+    in the same transaction as the invoice being issued."""
+
+    async def test_forwards_company_tenant_and_amount_to_the_repository(self) -> None:
+        service, fake_repo = _service_with_fake_repo([], total=0)
+        company_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+
+        await service.increase_outstanding(company_id, Decimal("23875.00"), tenant_id=tenant_id)
+
+        assert fake_repo.increase_calls == [(company_id, tenant_id, Decimal("23875.00"))]

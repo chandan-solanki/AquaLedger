@@ -33,3 +33,12 @@ class TripCatchQuantityInvariantError(BusinessRuleError):
     no longer equal quantity_caught after applying an update."""
 
     code = "TRIP_CATCH_QUANTITY_INVARIANT_VIOLATION"
+
+
+class TripCatchInsufficientQuantityError(BusinessRuleError):
+    """Raised when a requested deduction (Sprint 9's invoice issue workflow,
+    TripCatchService.deduct_available_quantity) exceeds available_quantity,
+    checked under a `SELECT ... FOR UPDATE` lock so it can never allow
+    available_quantity to go negative under concurrency."""
+
+    code = "TRIP_CATCH_INSUFFICIENT_QUANTITY"

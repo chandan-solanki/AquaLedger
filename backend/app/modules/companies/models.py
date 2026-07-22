@@ -23,6 +23,7 @@ from app.modules.companies.constants import CompanyStatus, CompanyType, OpeningB
 
 if TYPE_CHECKING:
     from app.modules.boats.models import Boat
+    from app.modules.invoices.models import Invoice
 
 
 class Company(TimestampMixin, Base):
@@ -86,6 +87,7 @@ class Company(TimestampMixin, Base):
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
 
     boats: Mapped[list["Boat"]] = relationship(back_populates="company")
+    invoices: Mapped[list["Invoice"]] = relationship(back_populates="company")
 
     __table_args__ = (
         Index(
