@@ -23,6 +23,7 @@ from app.modules.invoices.exceptions import (
     InvoiceNotDraftError,
     InvoiceNotFoundError,
     InvoiceNumberConflictError,
+    InvoiceReconciliationError,
 )
 from app.modules.invoices.models import Invoice, InvoiceItem, InvoiceSequence
 from app.modules.invoices.schemas import InvoiceListParams
@@ -80,6 +81,7 @@ class _FakeCompanyService:
         self.get_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
         self.find_ids_calls: list[tuple[uuid.UUID, str]] = []
         self.find_ids_result: list[uuid.UUID] = []
+        self.recalculate_outstanding_calls: list[tuple[uuid.UUID, uuid.UUID, Decimal]] = []
 
     async def get(self, company_id: uuid.UUID, *, tenant_id: uuid.UUID) -> _CompanyStub:
         self.get_calls.append((company_id, tenant_id))
@@ -91,6 +93,11 @@ class _FakeCompanyService:
     async def find_ids_by_name(self, tenant_id: uuid.UUID, q: str) -> list[uuid.UUID]:
         self.find_ids_calls.append((tenant_id, q))
         return self.find_ids_result
+
+    async def recalculate_outstanding(
+        self, company_id: uuid.UUID, *, tenant_id: uuid.UUID, total_open_balance: Decimal
+    ) -> None:
+        self.recalculate_outstanding_calls.append((company_id, tenant_id, total_open_balance))
 
 
 class _TripCatchStub:
@@ -183,10 +190,23 @@ class _FakeInvoiceRepo:
         # For _allocate_invoice_number.
         self.sequences: dict[tuple[uuid.UUID, str, str], InvoiceSequence] = {}
         self.ensure_sequence_calls: list[tuple[uuid.UUID, str, str]] = []
+        # For recalculate_payment_totals (Sprint 10 Session 4).
+        self.by_id: dict[uuid.UUID, Invoice] = {}
+        self.open_balance_by_company: dict[uuid.UUID, Decimal] = {}
+        self.sum_open_balance_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
 
     async def search(self, tenant_id: uuid.UUID, **kwargs: Any) -> tuple[list[Invoice], int]:
         self.last_search_call = {"tenant_id": tenant_id, **kwargs}
         return self.rows, self.total
+
+    async def get_by_id(self, invoice_id: uuid.UUID, tenant_id: uuid.UUID) -> Invoice | None:
+        return self.by_id.get(invoice_id)
+
+    async def sum_open_balance_by_company(
+        self, company_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> Decimal:
+        self.sum_open_balance_calls.append((company_id, tenant_id))
+        return self.open_balance_by_company.get(company_id, Decimal("0"))
 
     async def search_items(
         self, invoice_id: uuid.UUID, tenant_id: uuid.UUID, **kwargs: Any
@@ -835,6 +855,136 @@ class TestIssueValidation:
             await service.issue(invoice.id, tenant_id=invoice.tenant_id, actor_id=uuid.uuid4())
 
         assert fake_session.rollback_calls == 1
+
+
+class _FakeFlushSession:
+    """Stands in for AsyncSession - recalculate_payment_totals only ever
+    calls .flush() on it (the happy-path commit/refresh belongs to the
+    caller, PaymentService, and is integration-tested instead)."""
+
+    def __init__(self) -> None:
+        self.flush_calls = 0
+
+    async def flush(self) -> None:
+        self.flush_calls += 1
+
+
+def _reconciliation_service_with_fakes(
+    *, invoice: Invoice | None, open_balance_by_company: Decimal = Decimal("0")
+) -> tuple[InvoiceService, _FakeInvoiceRepo, _FakeCompanyService, _FakeFlushSession]:
+    service = InvoiceService.__new__(InvoiceService)
+    fake_repo = _FakeInvoiceRepo()
+    if invoice is not None:
+        fake_repo.by_id[invoice.id] = invoice
+        fake_repo.open_balance_by_company[invoice.company_id] = open_balance_by_company
+    fake_company_service = _FakeCompanyService()
+    fake_session = _FakeFlushSession()
+    service._repo = fake_repo  # type: ignore[assignment]
+    service._company_service = fake_company_service  # type: ignore[assignment]
+    service._session = fake_session  # type: ignore[assignment]
+    return service, fake_repo, fake_company_service, fake_session
+
+
+class TestRecalculatePaymentTotals:
+    """InvoiceService.recalculate_payment_totals - Sprint 10 Session 4's
+    outstanding engine. PaymentService is the only caller; it computes
+    total_allocated via its own PaymentRepository and passes it in."""
+
+    async def test_zero_allocated_leaves_the_invoice_issued(self) -> None:
+        invoice = _make_invoice(status=InvoiceStatus.ISSUED, total_amount=Decimal("1000.00"))
+        service, _, _, _ = _reconciliation_service_with_fakes(invoice=invoice)
+
+        await service.recalculate_payment_totals(
+            invoice.id, tenant_id=invoice.tenant_id, total_allocated=Decimal("0")
+        )
+
+        assert invoice.paid_amount == Decimal("0.00")
+        assert invoice.balance_amount == Decimal("1000.00")
+        assert invoice.status == InvoiceStatus.ISSUED
+
+    async def test_partial_allocation_moves_the_invoice_to_partially_paid(self) -> None:
+        invoice = _make_invoice(status=InvoiceStatus.ISSUED, total_amount=Decimal("1000.00"))
+        service, _, _, _ = _reconciliation_service_with_fakes(invoice=invoice)
+
+        await service.recalculate_payment_totals(
+            invoice.id, tenant_id=invoice.tenant_id, total_allocated=Decimal("400.00")
+        )
+
+        assert invoice.paid_amount == Decimal("400.00")
+        assert invoice.balance_amount == Decimal("600.00")
+        assert invoice.status == InvoiceStatus.PARTIALLY_PAID
+
+    async def test_full_allocation_moves_the_invoice_to_paid(self) -> None:
+        invoice = _make_invoice(
+            status=InvoiceStatus.PARTIALLY_PAID, total_amount=Decimal("1000.00")
+        )
+        service, _, _, _ = _reconciliation_service_with_fakes(invoice=invoice)
+
+        await service.recalculate_payment_totals(
+            invoice.id, tenant_id=invoice.tenant_id, total_allocated=Decimal("1000.00")
+        )
+
+        assert invoice.status == InvoiceStatus.PAID
+
+    async def test_removing_allocations_moves_a_paid_invoice_back_down(self) -> None:
+        invoice = _make_invoice(status=InvoiceStatus.PAID, total_amount=Decimal("1000.00"))
+        service, _, _, _ = _reconciliation_service_with_fakes(invoice=invoice)
+
+        await service.recalculate_payment_totals(
+            invoice.id, tenant_id=invoice.tenant_id, total_allocated=Decimal("250.00")
+        )
+
+        assert invoice.status == InvoiceStatus.PARTIALLY_PAID
+        assert invoice.balance_amount == Decimal("750.00")
+
+    async def test_draft_invoice_raises_reconciliation_error(self) -> None:
+        """Not reachable through the API - an allocation can only ever be
+        created against an ISSUED/PARTIALLY_PAID invoice - but this module
+        must not silently recalculate one outside the payment lifecycle."""
+        invoice = _make_invoice(status=InvoiceStatus.DRAFT, total_amount=Decimal("1000.00"))
+        service, _, _, _ = _reconciliation_service_with_fakes(invoice=invoice)
+
+        with pytest.raises(InvoiceReconciliationError):
+            await service.recalculate_payment_totals(
+                invoice.id, tenant_id=invoice.tenant_id, total_allocated=Decimal("0")
+            )
+
+    async def test_raises_not_found_when_invoice_missing(self) -> None:
+        service, _, _, _ = _reconciliation_service_with_fakes(invoice=None)
+
+        with pytest.raises(InvoiceNotFoundError):
+            await service.recalculate_payment_totals(
+                uuid.uuid4(), tenant_id=uuid.uuid4(), total_allocated=Decimal("0")
+            )
+
+    async def test_flushes_before_summing_the_companys_open_balance(self) -> None:
+        """recalculate_payment_totals must flush its own invoice.balance_amount
+        write before reading sum_open_balance_by_company - this session's
+        autoflush is disabled (app.db.session), so without an explicit flush
+        that SUM would read a stale balance_amount for this very invoice."""
+        invoice = _make_invoice(status=InvoiceStatus.ISSUED, total_amount=Decimal("1000.00"))
+        service, fake_repo, _, fake_session = _reconciliation_service_with_fakes(invoice=invoice)
+
+        await service.recalculate_payment_totals(
+            invoice.id, tenant_id=invoice.tenant_id, total_allocated=Decimal("400.00")
+        )
+
+        assert fake_session.flush_calls == 1
+        assert fake_repo.sum_open_balance_calls == [(invoice.company_id, invoice.tenant_id)]
+
+    async def test_cascades_into_company_outstanding_recalculation(self) -> None:
+        invoice = _make_invoice(status=InvoiceStatus.ISSUED, total_amount=Decimal("1000.00"))
+        service, _, fake_company_service, _ = _reconciliation_service_with_fakes(
+            invoice=invoice, open_balance_by_company=Decimal("2500.00")
+        )
+
+        await service.recalculate_payment_totals(
+            invoice.id, tenant_id=invoice.tenant_id, total_allocated=Decimal("400.00")
+        )
+
+        assert fake_company_service.recalculate_outstanding_calls == [
+            (invoice.company_id, invoice.tenant_id, Decimal("2500.00"))
+        ]
 
 
 class TestAllocateInvoiceNumber:

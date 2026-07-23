@@ -143,7 +143,10 @@ class TestCreateCompany:
         response = await client.post(
             "/api/v1/companies",
             json={
-                "code": "V-1", "name": "V1", "company_type": "customer", "email": "not-an-email",
+                "code": "V-1",
+                "name": "V1",
+                "company_type": "customer",
+                "email": "not-an-email",
             },
             headers=headers,
         )
@@ -165,7 +168,10 @@ class TestCreateCompany:
         response = await client.post(
             "/api/v1/companies",
             json={
-                "code": "V-3", "name": "V3", "company_type": "customer", "gstin": "BADGSTIN",
+                "code": "V-3",
+                "name": "V3",
+                "company_type": "customer",
+                "gstin": "BADGSTIN",
             },
             headers=headers,
         )
@@ -187,7 +193,9 @@ class TestCreateCompany:
         response = await client.post(
             "/api/v1/companies",
             json={
-                "code": "V-5", "name": "V5", "company_type": "customer",
+                "code": "V-5",
+                "name": "V5",
+                "company_type": "customer",
                 "credit_limit": "-100.00",
             },
             headers=headers,
@@ -259,8 +267,12 @@ class TestListCompanies:
         body = response.json()
         assert "data" in body and "meta" in body
         assert set(body["meta"]) == {
-            "total_records", "total_pages", "current_page", "page_size",
-            "has_next", "has_previous",
+            "total_records",
+            "total_pages",
+            "current_page",
+            "page_size",
+            "has_next",
+            "has_previous",
         }
 
     async def test_search_matches_name_case_insensitively(self, client: AsyncClient) -> None:
@@ -383,9 +395,7 @@ class TestListCompanies:
 
 class TestUpdateCompany:
     async def test_requires_authentication(self, client: AsyncClient) -> None:
-        response = await client.put(
-            f"/api/v1/companies/{uuid.uuid4()}", json={"name": "New Name"}
-        )
+        response = await client.put(f"/api/v1/companies/{uuid.uuid4()}", json={"name": "New Name"})
         assert response.status_code == 401
 
     async def test_requires_edit_permission(
@@ -398,9 +408,7 @@ class TestUpdateCompany:
         )
         assert response.status_code == 403
 
-    async def test_partial_update_only_changes_supplied_fields(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_partial_update_only_changes_supplied_fields(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
         created = await _create_company(
             client, headers, name="Original Name", city="Mumbai", credit_limit="1000.00"
@@ -484,9 +492,7 @@ class TestDeleteCompany:
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         tenant_id = await _admin_tenant_id(client)
-        headers = await _make_user_headers(
-            db_session, tenant_id, ["company:view", "company:edit"]
-        )
+        headers = await _make_user_headers(db_session, tenant_id, ["company:view", "company:edit"])
         response = await client.delete(f"/api/v1/companies/{uuid.uuid4()}", headers=headers)
         assert response.status_code == 403
 
@@ -504,9 +510,7 @@ class TestDeleteCompany:
             await db_session.execute(select(User).where(User.email == SUPER_ADMIN_EMAIL))
         ).scalar_one()
         row = (
-            await db_session.execute(
-                select(Company).where(Company.id == uuid.UUID(created["id"]))
-            )
+            await db_session.execute(select(Company).where(Company.id == uuid.UUID(created["id"])))
         ).scalar_one()
         assert row.deleted_at is not None
         assert row.deleted_by == admin.id

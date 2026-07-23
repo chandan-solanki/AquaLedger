@@ -41,9 +41,7 @@ class TestCompanyCreateRequestDefaults:
             assert request.company_type == value
 
     def test_accepts_opening_balance_type(self) -> None:
-        request = CompanyCreateRequest(
-            **_MINIMAL, opening_balance_type=OpeningBalanceType.DEBIT
-        )
+        request = CompanyCreateRequest(**_MINIMAL, opening_balance_type=OpeningBalanceType.DEBIT)
         assert request.opening_balance_type == OpeningBalanceType.DEBIT
 
 
@@ -85,9 +83,7 @@ class TestGstinValidation:
         request = CompanyCreateRequest(**_MINIMAL, gstin="27abcde1234f1z5")
         assert request.gstin == "27ABCDE1234F1Z5"
 
-    @pytest.mark.parametrize(
-        "value", ["INVALIDGSTIN", "27ABCDE1234F1Z", "1234567890ABCDE", ""]
-    )
+    @pytest.mark.parametrize("value", ["INVALIDGSTIN", "27ABCDE1234F1Z", "1234567890ABCDE", ""])
     def test_rejects_invalid_gstin(self, value: str) -> None:
         with pytest.raises(ValidationError):
             CompanyCreateRequest(**_MINIMAL, gstin=value)

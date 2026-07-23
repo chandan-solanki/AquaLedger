@@ -59,9 +59,7 @@ class _FakeTripExpenseRepo:
         self.total = total
         self.last_search_call: dict[str, Any] | None = None
 
-    async def search(
-        self, tenant_id: uuid.UUID, **kwargs: Any
-    ) -> tuple[list[TripExpense], int]:
+    async def search(self, tenant_id: uuid.UUID, **kwargs: Any) -> tuple[list[TripExpense], int]:
         self.last_search_call = {"tenant_id": tenant_id, **kwargs}
         return self.rows, self.total
 
@@ -125,9 +123,7 @@ class TestEnsureTripValidForExpense:
         service, _, _ = _service_with_fakes(trip=trip)
 
         with pytest.raises(TripExpenseTripCancelledError):
-            await service._ensure_trip_valid_for_expense(
-                trip.id, date(2026, 6, 5), uuid.uuid4()
-            )
+            await service._ensure_trip_valid_for_expense(trip.id, date(2026, 6, 5), uuid.uuid4())
 
     @pytest.mark.parametrize(
         "status", [TripStatus.PLANNED, TripStatus.DEPARTED, TripStatus.RETURNED]
@@ -149,9 +145,7 @@ class TestEnsureTripValidForExpense:
         service, _, _ = _service_with_fakes(trip=trip)
 
         with pytest.raises(TripExpenseDateBeforeDepartureError):
-            await service._ensure_trip_valid_for_expense(
-                trip.id, date(2026, 5, 31), uuid.uuid4()
-            )
+            await service._ensure_trip_valid_for_expense(trip.id, date(2026, 5, 31), uuid.uuid4())
 
     async def test_accepts_expense_date_equal_to_departure_date(self) -> None:
         trip = _TripStub(departure_datetime=datetime(2026, 6, 1, 4, 0, tzinfo=UTC))
@@ -167,9 +161,7 @@ class TestEnsureTripValidForExpense:
         service, _, _ = _service_with_fakes(trip=trip)
 
         with pytest.raises(TripExpenseDateAfterReturnError):
-            await service._ensure_trip_valid_for_expense(
-                trip.id, date(2026, 6, 11), uuid.uuid4()
-            )
+            await service._ensure_trip_valid_for_expense(trip.id, date(2026, 6, 11), uuid.uuid4())
 
     async def test_accepts_expense_date_equal_to_return_date(self) -> None:
         trip = _TripStub(

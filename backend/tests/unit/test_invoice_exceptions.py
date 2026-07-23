@@ -15,6 +15,7 @@ from app.modules.invoices.exceptions import (
     InvoiceNotDraftError,
     InvoiceNotFoundError,
     InvoiceNumberConflictError,
+    InvoiceReconciliationError,
 )
 
 
@@ -54,6 +55,12 @@ from app.modules.invoices.exceptions import (
             BusinessRuleError,
         ),
         (InvoiceNumberConflictError, 409, "INVOICE_NUMBER_CONFLICT", ConflictError),
+        (
+            InvoiceReconciliationError,
+            422,
+            "INVOICE_RECONCILIATION_ERROR",
+            BusinessRuleError,
+        ),
     ],
 )
 def test_invoice_exception_status_and_code(
@@ -92,6 +99,7 @@ def test_business_rule_and_conflict_errors_are_not_not_found_errors() -> None:
         InvoiceEmptyError,
         InvoiceInsufficientInventoryError,
         InvoiceNumberConflictError,
+        InvoiceReconciliationError,
     )
     for exc_cls in business_rule_and_conflict_errors:
         assert not issubclass(exc_cls, NotFoundError)
@@ -112,5 +120,6 @@ def test_all_invoice_error_codes_are_distinct() -> None:
         InvoiceEmptyError("x").code,
         InvoiceInsufficientInventoryError("x").code,
         InvoiceNumberConflictError("x").code,
+        InvoiceReconciliationError("x").code,
     }
-    assert len(codes) == 13
+    assert len(codes) == 14

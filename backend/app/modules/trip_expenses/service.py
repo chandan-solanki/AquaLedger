@@ -146,9 +146,7 @@ class TripExpenseService:
         except TripNotFoundError as exc:
             raise TripExpenseTripNotFoundError("The specified trip does not exist") from exc
 
-    async def _get_or_raise(
-        self, trip_expense_id: uuid.UUID, tenant_id: uuid.UUID
-    ) -> TripExpense:
+    async def _get_or_raise(self, trip_expense_id: uuid.UUID, tenant_id: uuid.UUID) -> TripExpense:
         trip_expense = await self._repo.get_by_id(trip_expense_id, tenant_id)
         if trip_expense is None:
             raise TripExpenseNotFoundError("Trip expense not found")

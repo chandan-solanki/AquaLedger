@@ -10,6 +10,7 @@ from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
 from app.modules.companies.exceptions import (
     CompanyNotFoundError,
+    CompanyOutstandingCalculationError,
     DuplicateCompanyCodeError,
     DuplicateCompanyNameError,
 )
@@ -20,6 +21,10 @@ from app.modules.companies.schemas import (
     CompanyListParams,
     CompanyResponse,
     CompanyUpdateRequest,
+)
+from app.modules.payments.domain.reconciliation import (
+    ReconciliationError,
+    calculate_company_outstanding,
 )
 
 
@@ -135,6 +140,28 @@ class CompanyService:
         transaction and commits; this only stages the write, same as every
         other cross-module mutation in this codebase."""
         await self._repo.increase_outstanding_amount(company_id, tenant_id, amount)
+
+    async def recalculate_outstanding(
+        self, company_id: uuid.UUID, *, tenant_id: uuid.UUID, total_open_balance: Decimal
+    ) -> None:
+        """Sets Company.outstanding_amount to the recomputed total - the
+        Sprint 10 Session 4 outstanding engine's "Recompute, do NOT
+        increment/decrement" counterpart to increase_outstanding's atomic
+        +=. `total_open_balance` is the sum of balance_amount across this
+        company's open invoices, computed and passed in by
+        InvoiceService.recalculate_payment_totals (via its own
+        InvoiceRepository - CompanyService never touches the invoices
+        module's tables, ARCHITECTURE.md §2). The caller owns the
+        transaction and commits; this only stages the write, same as
+        increase_outstanding.
+        """
+        try:
+            outstanding_amount = calculate_company_outstanding(
+                total_open_balance=total_open_balance
+            )
+        except ReconciliationError as exc:
+            raise CompanyOutstandingCalculationError(str(exc)) from exc
+        await self._repo.set_outstanding_amount(company_id, tenant_id, outstanding_amount)
 
     async def _get_or_raise(self, company_id: uuid.UUID, tenant_id: uuid.UUID) -> Company:
         company = await self._repo.get_by_id(company_id, tenant_id)

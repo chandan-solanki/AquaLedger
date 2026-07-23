@@ -241,9 +241,7 @@ class TestCreateTripCatch:
             await db_session.execute(select(User).where(User.email == SUPER_ADMIN_EMAIL))
         ).scalar_one()
         row = (
-            await db_session.execute(
-                select(TripCatch).where(TripCatch.id == uuid.UUID(body["id"]))
-            )
+            await db_session.execute(select(TripCatch).where(TripCatch.id == uuid.UUID(body["id"])))
         ).scalar_one()
         assert row.created_by == admin.id
         assert row.updated_by == admin.id
@@ -493,9 +491,7 @@ class TestGetTripCatch:
             db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS
         )
 
-        response = await client.get(
-            f"/api/v1/trip-catches/{created['id']}", headers=other_headers
-        )
+        response = await client.get(f"/api/v1/trip-catches/{created['id']}", headers=other_headers)
         assert response.status_code == 404
 
 
@@ -528,9 +524,7 @@ class TestListTripCatches:
         )
         db_session.add(other_tenant)
         await db_session.commit()
-        headers = await _make_user_headers(
-            db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS
-        )
+        headers = await _make_user_headers(db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS)
 
         marker = uuid.uuid4().hex[:8]
         matching_trip = await _create_returned_trip(
@@ -556,9 +550,7 @@ class TestListTripCatches:
         )
         db_session.add(other_tenant)
         await db_session.commit()
-        headers = await _make_user_headers(
-            db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS
-        )
+        headers = await _make_user_headers(db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS)
 
         marker = uuid.uuid4().hex[:8]
         matching_fish = await _create_fish(client, headers, name=f"Mackerel {marker}")
@@ -578,9 +570,7 @@ class TestListTripCatches:
         )
         db_session.add(other_tenant)
         await db_session.commit()
-        headers = await _make_user_headers(
-            db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS
-        )
+        headers = await _make_user_headers(db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS)
 
         trip_a = await _create_returned_trip(client, headers)
         trip_b = await _create_returned_trip(client, headers)
@@ -599,9 +589,7 @@ class TestListTripCatches:
         )
         db_session.add(other_tenant)
         await db_session.commit()
-        headers = await _make_user_headers(
-            db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS
-        )
+        headers = await _make_user_headers(db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS)
 
         fish_a = await _create_fish(client, headers)
         fish_b = await _create_fish(client, headers)
@@ -620,16 +608,12 @@ class TestListTripCatches:
         )
         db_session.add(other_tenant)
         await db_session.commit()
-        headers = await _make_user_headers(
-            db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS
-        )
+        headers = await _make_user_headers(db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS)
 
         await _create_trip_catch(client, headers, grade="A")
         graded_b = await _create_trip_catch(client, headers, grade="B")
 
-        response = await client.get(
-            "/api/v1/trip-catches", params={"grade": "B"}, headers=headers
-        )
+        response = await client.get("/api/v1/trip-catches", params={"grade": "B"}, headers=headers)
         ids = [c["id"] for c in response.json()["data"]]
         assert ids == [graded_b["id"]]
 
@@ -641,9 +625,7 @@ class TestListTripCatches:
         )
         db_session.add(other_tenant)
         await db_session.commit()
-        headers = await _make_user_headers(
-            db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS
-        )
+        headers = await _make_user_headers(db_session, other_tenant.id, _ALL_TRIP_CATCH_PERMISSIONS)
 
         in_range = await _create_trip_catch(client, headers, landing_date="2026-06-05")
         await _create_trip_catch(client, headers, landing_date="2026-09-15")
@@ -656,9 +638,7 @@ class TestListTripCatches:
         ids = [c["id"] for c in response.json()["data"]]
         assert ids == [in_range["id"]]
 
-    async def test_sort_ascending_and_descending_by_landing_date(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_sort_ascending_and_descending_by_landing_date(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
         marker = uuid.uuid4().hex[:8]
         fish = await _create_fish(client, headers, name=f"Sort Fish {marker}")
@@ -808,9 +788,7 @@ class TestListTripCatches:
 
 class TestUpdateTripCatch:
     async def test_requires_authentication(self, client: AsyncClient) -> None:
-        response = await client.put(
-            f"/api/v1/trip-catches/{uuid.uuid4()}", json={"remarks": "x"}
-        )
+        response = await client.put(f"/api/v1/trip-catches/{uuid.uuid4()}", json={"remarks": "x"})
         assert response.status_code == 401
 
     async def test_requires_edit_permission(
@@ -823,9 +801,7 @@ class TestUpdateTripCatch:
         )
         assert response.status_code == 403
 
-    async def test_partial_update_only_changes_supplied_fields(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_partial_update_only_changes_supplied_fields(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
         created = await _create_trip_catch(client, headers, landing_port="Sassoon Dock")
 

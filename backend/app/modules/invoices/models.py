@@ -14,6 +14,7 @@ from app.modules.invoices.constants import InvoiceStatus
 if TYPE_CHECKING:
     from app.modules.companies.models import Company
     from app.modules.fish.models import Fish
+    from app.modules.payments.models import PaymentAllocation
     from app.modules.trip_catches.models import TripCatch
 
 
@@ -99,6 +100,7 @@ class Invoice(TimestampMixin, Base):
     items: Mapped[list["InvoiceItem"]] = relationship(
         back_populates="invoice", order_by="InvoiceItem.line_number"
     )
+    payment_allocations: Mapped[list["PaymentAllocation"]] = relationship(back_populates="invoice")
 
     __table_args__ = (
         Index("ix_invoices_tenant", "tenant_id", postgresql_where=deleted_at.is_(None)),

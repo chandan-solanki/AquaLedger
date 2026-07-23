@@ -121,6 +121,20 @@ class CompanyRepository:
             .values(outstanding_amount=Company.outstanding_amount + amount)
         )
 
+    async def set_outstanding_amount(
+        self, company_id: uuid.UUID, tenant_id: uuid.UUID, amount: Decimal
+    ) -> None:
+        """Overwrites outstanding_amount with an already-recomputed value -
+        a straight SET, not the atomic += increase_outstanding_amount uses.
+        Used by CompanyService.recalculate_outstanding for the Sprint 10
+        Session 4 outstanding engine (TASKS.md: "Do NOT increment/decrement.
+        Recompute.")."""
+        await self._session.execute(
+            update(Company)
+            .where(Company.id == company_id, Company.tenant_id == tenant_id)
+            .values(outstanding_amount=amount)
+        )
+
     async def find_ids_by_name(self, tenant_id: uuid.UUID, pattern: str) -> list[uuid.UUID]:
         """Company ids whose name matches `pattern` (a caller-supplied ILIKE
         pattern), for this tenant. Exists so other modules (invoices) can
