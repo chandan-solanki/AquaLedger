@@ -1,89 +1,38 @@
-# Sprint 10 – Payment Management
+# Sprint 11 – Purchase Management
 
-## Sprint Goal
+## Goal
 
-Implement the complete Payment Management module for FishERP.
-
-This module manages:
-
-- Customer Payments
-- Payment Allocation
-- Outstanding Balance
-- Invoice Settlement
-- Partial Payments
-- Full Payments
-
-This sprint integrates with:
-
-- Authentication
-- Company
-- Invoice
-- Future Ledger
-- Future Reports
-
-No Ledger implementation in this sprint.
-No PDF generation.
-No Dashboard.
+Implement Purchase Management following the same architecture and quality standards as Invoice and Payment Management.
 
 ---
 
-# Module Structure
+# Architecture Rules
 
-Create
-
-app/modules/payments/
-
-- router.py
-- service.py
-- repository.py
-- models.py
-- schemas.py
-- dependencies.py
-- permissions.py
-- constants.py
-- exceptions.py
-
-Create
-
-app/modules/payments/domain/
-
-- allocation.py
-- numbering.py
+- Router → Service → Repository
+- Domain layer for calculations
+- Multi-tenant
+- RBAC
+- Soft Delete
+- Audit Fields
+- Decimal only
+- ROUND_HALF_UP
+- Async SQLAlchemy
+- No cross-module repository access
+- Full Unit + Integration + API tests
 
 ---
 
-# Session 1
-## Database Foundation
+# Session 1 – Supplier & Purchase Foundation
 
-Create
+## Create Modules
 
-Payment
+modules/suppliers/
 
-PaymentAllocation
+modules/purchase/
 
-Models
+## Suppliers
 
-Schemas
-
-Constants
-
-Exceptions
-
-Permissions
-
-Dependencies
-
-Migration
-
-Indexes
-
-Relationships
-
-Swagger Tag
-
----
-
-## Payment Table
+Supplier
 
 Fields
 
@@ -91,396 +40,299 @@ id
 
 tenant_id
 
-payment_number
+code
 
-company_id
+name
 
-payment_date
+legal_name
 
-payment_method
+gstin
 
-reference_number
+phone
 
-bank_name
+email
 
-amount
+address
 
-allocated_amount
+city
 
-unallocated_amount
+state
+
+country
+
+contact_person
+
+credit_days
+
+opening_balance
+
+outstanding_amount
+
+status
+
+audit fields
+
+soft delete
+
+## Purchase Bills
+
+PurchaseBill
+
+Fields
+
+id
+
+tenant_id
+
+supplier_id
+
+bill_number
+
+bill_date
+
+due_date
+
+subtotal
+
+discount_amount
+
+tax_amount
+
+transport_charge
+
+other_charge
+
+round_off
+
+total_amount
+
+paid_amount
+
+balance_amount
 
 remarks
 
 status
 
-created_at
+posted_at
 
-updated_at
+audit fields
 
-deleted_at
+soft delete
 
-created_by
-
-updated_by
-
-deleted_by
-
----
-
-## Payment Allocation Table
+PurchaseBillItem
 
 Fields
 
 id
 
-tenant_id
+purchase_bill_id
 
-payment_id
+line_number
 
-invoice_id
+description
 
-allocated_amount
+quantity
 
-created_at
+unit
 
-created_by
+rate
 
----
+discount_percent
 
-Relationships
+discount_amount
 
-Payment
+tax_rate
 
-↓
+tax_amount
 
-Payment Allocations
+line_total
 
-↓
+Create
 
-Invoice
+Models
 
----
+Schemas (Response)
 
-Indexes
+Permissions
 
-payment_number
+Constants
 
-company_id
+Exceptions
 
-payment_date
+Repository skeleton
 
-status
+Service skeleton
 
-Soft delete indexes
+Router skeleton
 
----
+Migrations
 
-Status
+Swagger registration
 
-Draft
-
-Posted
-
-Cancelled
+No CRUD
 
 ---
 
-Migration
-
-Seed permissions
-
-payment:view
-
-payment:create
-
-payment:edit
-
-payment:delete
-
-payment:post
-
----
-
-Verification
-
-Migration
-
-Ruff
-
-MyPy
-
-Tests
-
----
-
-# Session 2
-## Draft Payment CRUD
+# Session 2 – Supplier CRUD + Purchase Bill CRUD
 
 Implement
 
-Repository
+Supplier CRUD
 
-Service
-
-Router
-
-CRUD
-
-Create Draft Payment
-
-Update Draft
-
-Delete Draft
-
-Get
-
-List
+Purchase Bill CRUD
 
 Search
 
-Filtering
+Filter
 
-Sorting
+Sort
 
 Pagination
 
-RBAC
+Validate Supplier
 
-Tenant Isolation
+Draft only edit/delete
 
-Soft Delete
+Server owns
 
----
+bill_number
 
-Search
-
-payment_number
-
-reference_number
-
-company_name
-
----
-
-Filtering
+financial fields
 
 status
 
-company
-
-payment_method
-
-payment_date
+posted_at
 
 ---
 
-Sorting
-
-payment_date
-
-payment_number
-
-amount
-
-created_at
-
----
-
-Business Rules
-
-Draft only editable
-
-Draft only deletable
-
-No allocation yet
-
-No posting yet
-
----
-
-# Session 3
-## Payment Allocation Engine
+# Session 3 – Purchase Bill Items
 
 Implement
 
-Payment Allocation CRUD
+Add Item
 
-Allocate payment
+List Items
 
-Remove allocation
+Update Item
 
-Update allocation
-
-Validation
-
-Invoice exists
-
-Invoice belongs to tenant
-
-Invoice status
-
-Amount validation
-
-Outstanding validation
-
-Use
-
-InvoiceService
-
-Never InvoiceRepository
-
-Business Rules
-
-Allocated amount
-
-<=
-
-Invoice balance
-
-Payment amount
-
->=
-
-Total allocations
-
-Support
-
-Partial Allocation
-
-Multiple allocations
-
-Unallocated balance
-
-Prepare allocation.py
-
-No posting yet
-
----
-
-# Session 4
-## Outstanding Engine
-
-Server updates
-
-Invoice.paid_amount
-
-Invoice.balance_amount
-
-Invoice.status
-
-Company.outstanding_amount
-
-Rules
-
-ISSUED
-
-↓
-
-PARTIALLY_PAID
-
-↓
-
-PAID
-
-Recalculate after
-
-Allocate
-
-Update Allocation
-
-Remove Allocation
-
-Server owns calculations
-
-Never trust client
-
-Decimal only
-
-ROUND_HALF_UP
-
----
-
-# Session 5
-## Post Payment Workflow
-
-Endpoint
-
-POST
-
-/api/v1/payments/{payment_id}/post
-
-Workflow
-
-Lock Payment
-
-FOR UPDATE
-
-↓
+Delete Item
 
 Validate
 
-↓
+quantity > 0
 
-Lock Invoices
+rate >= 0
 
-FOR UPDATE
+discount %
 
-↓
+tax %
 
-Apply Allocations
+Server calculates nothing yet
 
-↓
+Support
 
-Update Invoice
+Multiple Items
 
-↓
+Sequential line numbers
 
-Update Company
-
-↓
-
-Generate Payment Number
-
-↓
-
-Mark Posted
-
-↓
-
-Commit
-
-Rollback
-
-if anything fails
-
-Business Rules
-
-Cannot post twice
-
-Cannot edit posted payment
-
-Cannot delete posted payment
-
-Payment must have allocations
-
-No overpayment
-
-No negative balance
-
-Prepare
-
-Ledger Hook
-
-Receipt Hook
-
-Outbox Hook
-
-(No implementation)
+Draft only
 
 ---
 
-# Session 6
-## Testing
+# Session 4 – Financial Engine
+
+Create
+
+domain/totals.py
+
+Calculate
+
+Line
+
+discount
+
+tax
+
+line_total
+
+Purchase Bill
+
+subtotal
+
+discount
+
+tax
+
+charges
+
+round_off
+
+total
+
+paid
+
+balance
+
+ROUND_HALF_UP
+
+Recalculate
+
+after every mutation
+
+Never trust client totals
+
+---
+
+# Session 5 – Purchase Posting Workflow
+
+POST
+
+/purchase/{id}/post
+
+Workflow
+
+Lock Purchase Bill
+
+Validate
+
+Has Items
+
+Recalculate
+
+Generate Bill Number
+
+POST
+
+Commit
+
+Rollback on failure
+
+Supplier Outstanding
+
+Recalculate
+
+Posting makes Purchase Bill immutable
+
+Use
+
+SELECT FOR UPDATE
+
+Implement
+
+purchase_sequences
+
+Concurrency safe numbering
+
+Format
+
+PUR/2026-27/00001
+
+---
+
+# Testing
+
+Every session
 
 Unit Tests
 
@@ -490,106 +342,36 @@ Integration Tests
 
 API Tests
 
-Concurrency Tests
-
-Swagger
-
-Architecture Review
-
-Security Review
-
-Performance Review
-
-Definition of Done
-
----
-
-# Verification
+Coverage
 
 CRUD
-
-Allocation
-
-Outstanding
-
-Invoice Status
-
-Company Outstanding
-
-Payment Number
-
-Posting
 
 RBAC
 
 Tenant Isolation
 
-Soft Delete
+Business Rules
 
 Concurrency
 
-Rollback
+Posting
+
+Financial Accuracy
+
+Swagger
 
 ---
 
-# Deliverables
+# Quality Gates
 
-At end of Sprint 10
+Ruff
 
-✓ Payment Module
+MyPy strict
 
-✓ Payment Allocation
+Pytest
 
-✓ Partial Payments
+Alembic
 
-✓ Full Payments
+Swagger
 
-✓ Outstanding Engine
-
-✓ Invoice Settlement
-
-✓ Payment Numbering
-
-✓ Payment Posting Workflow
-
-✓ Concurrency Protection
-
-✓ Transaction Safety
-
-✓ Swagger
-
-✓ Tests
-
----
-
-# Definition of Done
-
-Ruff clean
-
-MyPy strict clean
-
-Pytest passing
-
-Alembic migration successful
-
-Swagger updated
-
-RBAC complete
-
-Tenant isolation verified
-
-Soft delete verified
-
-Payment allocation verified
-
-Outstanding calculation verified
-
-Posting workflow verified
-
-Architecture review completed
-
-Security review completed
-
-Performance review completed
-
-Sprint 10 complete
+No regressions
