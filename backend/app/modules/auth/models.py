@@ -37,9 +37,7 @@ class Tenant(TimestampMixin, Base):
     roles: Mapped[list["Role"]] = relationship(back_populates="tenant")
 
     __table_args__ = (
-        CheckConstraint(
-            "fiscal_year_start_month BETWEEN 1 AND 12", name="ck_tenants_fiscal_month"
-        ),
+        CheckConstraint("fiscal_year_start_month BETWEEN 1 AND 12", name="ck_tenants_fiscal_month"),
     )
 
 
@@ -215,9 +213,7 @@ class AuditLog(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False
     )
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id")
-    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

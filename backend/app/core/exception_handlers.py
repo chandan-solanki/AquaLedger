@@ -78,9 +78,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             request_id=_request_id(request),
             timestamp=datetime.now(UTC),
         )
-        logger.warning(
-            "authorization_denied", message=exc.message, request_id=_request_id(request)
-        )
+        logger.warning("authorization_denied", message=exc.message, request_id=_request_id(request))
         return _error_response(exc.status_code, detail)
 
     @app.exception_handler(RequestValidationError)

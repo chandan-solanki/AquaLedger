@@ -104,9 +104,7 @@ class TestGetById:
         tenant_id: uuid.UUID,
         company_id: uuid.UUID,
     ) -> None:
-        boat = await _make_boat(
-            db_session, tenant_id, company_id, deleted_at=datetime.now(UTC)
-        )
+        boat = await _make_boat(db_session, tenant_id, company_id, deleted_at=datetime.now(UTC))
         assert await repo.get_by_id(boat.id, tenant_id) is None
 
 
@@ -202,9 +200,7 @@ class TestSearchFilters:
         company_id: uuid.UUID,
     ) -> None:
         await _make_boat(db_session, tenant_id, company_id, insurance_expiry=_PAST)
-        not_expired = await _make_boat(
-            db_session, tenant_id, company_id, insurance_expiry=_FUTURE
-        )
+        not_expired = await _make_boat(db_session, tenant_id, company_id, insurance_expiry=_FUTURE)
         unset = await _make_boat(db_session, tenant_id, company_id, insurance_expiry=None)
 
         rows, total = await _search(repo, tenant_id, insurance_expired=False)

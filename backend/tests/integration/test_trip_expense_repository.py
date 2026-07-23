@@ -270,13 +270,9 @@ class TestSearchFilters:
         )
         await _make_trip_expense(db_session, tenant_id, trip_id, expense_type=ExpenseType.FOOD)
         other_trip = await _fresh_trip_id(db_session, tenant_id)
-        await _make_trip_expense(
-            db_session, tenant_id, other_trip, expense_type=ExpenseType.ICE
-        )
+        await _make_trip_expense(db_session, tenant_id, other_trip, expense_type=ExpenseType.ICE)
 
-        rows, total = await _search(
-            repo, tenant_id, trip_id=trip_id, expense_type=ExpenseType.ICE
-        )
+        rows, total = await _search(repo, tenant_id, trip_id=trip_id, expense_type=ExpenseType.ICE)
         assert total == 1
         assert rows[0].id == target.id
 
@@ -433,12 +429,8 @@ class TestSearchSorting:
         silently override the caller's requested direction - the id
         tie-break has to point the same way as the primary sort."""
         tied_at = datetime.now(UTC)
-        older_id_row = await _make_trip_expense(
-            db_session, tenant_id, trip_id, created_at=tied_at
-        )
-        newer_id_row = await _make_trip_expense(
-            db_session, tenant_id, trip_id, created_at=tied_at
-        )
+        older_id_row = await _make_trip_expense(db_session, tenant_id, trip_id, created_at=tied_at)
+        newer_id_row = await _make_trip_expense(db_session, tenant_id, trip_id, created_at=tied_at)
         assert older_id_row.id < newer_id_row.id  # uuid7 is time-ordered
 
         desc_rows, _ = await _search(repo, tenant_id, sort="-created_at")

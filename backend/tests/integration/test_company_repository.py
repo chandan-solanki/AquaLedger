@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -66,9 +67,7 @@ class TestGetById:
     async def test_excludes_soft_deleted_rows(
         self, repo: CompanyRepository, db_session: AsyncSession, tenant_id: uuid.UUID
     ) -> None:
-        company = await _make_company(
-            db_session, tenant_id, deleted_at=datetime.now(UTC)
-        )
+        company = await _make_company(db_session, tenant_id, deleted_at=datetime.now(UTC))
         assert await repo.get_by_id(company.id, tenant_id) is None
 
 
@@ -80,8 +79,15 @@ class TestSearchFilters:
         customer = await _make_company(db_session, tenant_id, company_type=CompanyType.CUSTOMER)
 
         rows, total = await repo.search(
-            tenant_id, q=None, company_type=CompanyType.CUSTOMER, status=None, city=None,
-            state=None, sort="-created_at", page=1, page_size=50,
+            tenant_id,
+            q=None,
+            company_type=CompanyType.CUSTOMER,
+            status=None,
+            city=None,
+            state=None,
+            sort="-created_at",
+            page=1,
+            page_size=50,
         )
         assert total == 1
         assert rows[0].id == customer.id
@@ -93,8 +99,15 @@ class TestSearchFilters:
         inactive = await _make_company(db_session, tenant_id, status=CompanyStatus.INACTIVE)
 
         rows, total = await repo.search(
-            tenant_id, q=None, company_type=None, status=CompanyStatus.INACTIVE, city=None,
-            state=None, sort="-created_at", page=1, page_size=50,
+            tenant_id,
+            q=None,
+            company_type=None,
+            status=CompanyStatus.INACTIVE,
+            city=None,
+            state=None,
+            sort="-created_at",
+            page=1,
+            page_size=50,
         )
         assert total == 1
         assert rows[0].id == inactive.id
@@ -106,8 +119,15 @@ class TestSearchFilters:
         await _make_company(db_session, tenant_id, city="Kochi")
 
         rows, total = await repo.search(
-            tenant_id, q=None, company_type=None, status=None, city="mumbai", state=None,
-            sort="-created_at", page=1, page_size=50,
+            tenant_id,
+            q=None,
+            company_type=None,
+            status=None,
+            city="mumbai",
+            state=None,
+            sort="-created_at",
+            page=1,
+            page_size=50,
         )
         assert total == 1
         assert rows[0].id == mumbai.id
@@ -119,8 +139,15 @@ class TestSearchFilters:
         await _make_company(db_session, tenant_id, state="Maharashtra")
 
         rows, total = await repo.search(
-            tenant_id, q=None, company_type=None, status=None, city=None, state="Kerala",
-            sort="-created_at", page=1, page_size=50,
+            tenant_id,
+            q=None,
+            company_type=None,
+            status=None,
+            city=None,
+            state="Kerala",
+            sort="-created_at",
+            page=1,
+            page_size=50,
         )
         assert total == 1
         assert rows[0].id == kerala.id
@@ -135,8 +162,15 @@ class TestSearchFilters:
         await _make_company(db_session, tenant_id, city="Kochi", company_type=CompanyType.CUSTOMER)
 
         rows, total = await repo.search(
-            tenant_id, q=None, company_type=CompanyType.CUSTOMER, status=None, city="Mumbai",
-            state=None, sort="-created_at", page=1, page_size=50,
+            tenant_id,
+            q=None,
+            company_type=CompanyType.CUSTOMER,
+            status=None,
+            city="Mumbai",
+            state=None,
+            sort="-created_at",
+            page=1,
+            page_size=50,
         )
         assert total == 1
         assert rows[0].id == target.id
@@ -146,8 +180,15 @@ class TestSearchFilters:
     ) -> None:
         await _make_company(db_session, tenant_id, deleted_at=datetime.now(UTC))
         rows, total = await repo.search(
-            tenant_id, q=None, company_type=None, status=None, city=None, state=None,
-            sort="-created_at", page=1, page_size=50,
+            tenant_id,
+            q=None,
+            company_type=None,
+            status=None,
+            city=None,
+            state=None,
+            sort="-created_at",
+            page=1,
+            page_size=50,
         )
         assert total == 0
         assert rows == []
@@ -178,8 +219,15 @@ class TestSearchQuery:
         await _make_company(db_session, tenant_id)  # noise row that shouldn't match
 
         rows, total = await repo.search(
-            tenant_id, q=query, company_type=None, status=None, city=None, state=None,
-            sort="-created_at", page=1, page_size=50,
+            tenant_id,
+            q=query,
+            company_type=None,
+            status=None,
+            city=None,
+            state=None,
+            sort="-created_at",
+            page=1,
+            page_size=50,
         )
         assert total == 1
         assert rows[0].id == target.id
@@ -191,8 +239,15 @@ class TestSearchQuery:
         await _make_company(db_session, tenant_id)
 
         rows, total = await repo.search(
-            tenant_id, q="   ", company_type=None, status=None, city=None, state=None,
-            sort="-created_at", page=1, page_size=50,
+            tenant_id,
+            q="   ",
+            company_type=None,
+            status=None,
+            city=None,
+            state=None,
+            sort="-created_at",
+            page=1,
+            page_size=50,
         )
         assert total == 2
 
@@ -208,8 +263,15 @@ class TestSearchSorting:
     ) -> None:
         await self._seed_three(db_session, tenant_id)
         rows, _ = await repo.search(
-            tenant_id, q=None, company_type=None, status=None, city=None, state=None,
-            sort="name", page=1, page_size=50,
+            tenant_id,
+            q=None,
+            company_type=None,
+            status=None,
+            city=None,
+            state=None,
+            sort="name",
+            page=1,
+            page_size=50,
         )
         assert [r.name for r in rows] == ["Alpha", "Bravo", "Charlie"]
 
@@ -218,8 +280,15 @@ class TestSearchSorting:
     ) -> None:
         await self._seed_three(db_session, tenant_id)
         rows, _ = await repo.search(
-            tenant_id, q=None, company_type=None, status=None, city=None, state=None,
-            sort="-code", page=1, page_size=50,
+            tenant_id,
+            q=None,
+            company_type=None,
+            status=None,
+            city=None,
+            state=None,
+            sort="-code",
+            page=1,
+            page_size=50,
         )
         assert [r.code for r in rows] == ["C-CODE", "B-CODE", "A-CODE"]
 
@@ -229,8 +298,15 @@ class TestSearchSorting:
         await self._seed_three(db_session, tenant_id)
         for sort in ("created_at", "-created_at", "updated_at", "-updated_at"):
             rows, total = await repo.search(
-                tenant_id, q=None, company_type=None, status=None, city=None, state=None,
-                sort=sort, page=1, page_size=50,
+                tenant_id,
+                q=None,
+                company_type=None,
+                status=None,
+                city=None,
+                state=None,
+                sort=sort,
+                page=1,
+                page_size=50,
             )
             assert total == 3
             assert len(rows) == 3
@@ -244,8 +320,15 @@ class TestSearchPagination:
             await _make_company(db_session, tenant_id, code=f"P-{i}", name=f"Page Co {i}")
 
         rows, total = await repo.search(
-            tenant_id, q=None, company_type=None, status=None, city=None, state=None,
-            sort="code", page=1, page_size=2,
+            tenant_id,
+            q=None,
+            company_type=None,
+            status=None,
+            city=None,
+            state=None,
+            sort="code",
+            page=1,
+            page_size=2,
         )
         assert total == 5
         assert len(rows) == 2
@@ -259,8 +342,15 @@ class TestSearchPagination:
         seen_ids: set[uuid.UUID] = set()
         for page in (1, 2, 3):
             rows, _ = await repo.search(
-                tenant_id, q=None, company_type=None, status=None, city=None, state=None,
-                sort="code", page=page, page_size=2,
+                tenant_id,
+                q=None,
+                company_type=None,
+                status=None,
+                city=None,
+                state=None,
+                sort="code",
+                page=page,
+                page_size=2,
             )
             page_ids = {r.id for r in rows}
             assert not (page_ids & seen_ids), "pages overlapped"
@@ -272,11 +362,61 @@ class TestSearchPagination:
     ) -> None:
         await _make_company(db_session, tenant_id)
         rows, total = await repo.search(
-            tenant_id, q=None, company_type=None, status=None, city=None, state=None,
-            sort="-created_at", page=99, page_size=10,
+            tenant_id,
+            q=None,
+            company_type=None,
+            status=None,
+            city=None,
+            state=None,
+            sort="-created_at",
+            page=99,
+            page_size=10,
         )
         assert total == 1
         assert rows == []
+
+
+class TestSetOutstandingAmount:
+    """CompanyService.recalculate_outstanding's straight SET (Sprint 10
+    Session 4's outstanding engine) - distinct from
+    increase_outstanding_amount's atomic += used by the Sprint 9 issue
+    workflow."""
+
+    async def test_overwrites_with_the_given_amount(
+        self, repo: CompanyRepository, db_session: AsyncSession, tenant_id: uuid.UUID
+    ) -> None:
+        company = await _make_company(db_session, tenant_id, outstanding_amount=Decimal("999.00"))
+
+        await repo.set_outstanding_amount(company.id, tenant_id, Decimal("2500.00"))
+        await db_session.commit()
+
+        refetched = await repo.get_by_id(company.id, tenant_id)
+        assert refetched is not None
+        assert refetched.outstanding_amount == Decimal("2500.00")
+
+    async def test_can_set_back_to_zero(
+        self, repo: CompanyRepository, db_session: AsyncSession, tenant_id: uuid.UUID
+    ) -> None:
+        company = await _make_company(db_session, tenant_id, outstanding_amount=Decimal("500.00"))
+
+        await repo.set_outstanding_amount(company.id, tenant_id, Decimal("0"))
+        await db_session.commit()
+
+        refetched = await repo.get_by_id(company.id, tenant_id)
+        assert refetched is not None
+        assert refetched.outstanding_amount == Decimal("0.00")
+
+    async def test_scoped_to_the_given_tenant(
+        self, repo: CompanyRepository, db_session: AsyncSession, tenant_id: uuid.UUID
+    ) -> None:
+        company = await _make_company(db_session, tenant_id, outstanding_amount=Decimal("100.00"))
+
+        await repo.set_outstanding_amount(company.id, uuid.uuid4(), Decimal("999.00"))
+        await db_session.commit()
+
+        refetched = await repo.get_by_id(company.id, tenant_id)
+        assert refetched is not None
+        assert refetched.outstanding_amount == Decimal("100.00")  # unchanged
 
 
 class TestSearchTenantScoping:
@@ -291,8 +431,15 @@ class TestSearchTenantScoping:
         await _make_company(db_session, other_tenant.id, name="Not Mine")
 
         rows, total = await repo.search(
-            tenant_id, q=None, company_type=None, status=None, city=None, state=None,
-            sort="-created_at", page=1, page_size=50,
+            tenant_id,
+            q=None,
+            company_type=None,
+            status=None,
+            city=None,
+            state=None,
+            sort="-created_at",
+            page=1,
+            page_size=50,
         )
         assert total == 1
         assert rows[0].name == "Mine"

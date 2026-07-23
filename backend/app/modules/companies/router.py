@@ -43,9 +43,7 @@ async def create_company(
     current_user: User = Depends(get_current_user),
     service: CompanyService = Depends(get_company_service),
 ) -> CompanyResponse:
-    return await service.create(
-        payload, tenant_id=current_user.tenant_id, actor_id=current_user.id
-    )
+    return await service.create(payload, tenant_id=current_user.tenant_id, actor_id=current_user.id)
 
 
 _LIST_RESPONSE_EXAMPLE: dict[str, object] = {

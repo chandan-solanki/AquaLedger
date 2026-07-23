@@ -50,9 +50,7 @@ class TestGetUserByEmail:
     async def test_excludes_soft_deleted_users(
         self, repo: AuthRepository, db_session: AsyncSession
     ) -> None:
-        await _make_user(
-            db_session, email="deleted@fisherp.local", deleted_at=datetime.now(UTC)
-        )
+        await _make_user(db_session, email="deleted@fisherp.local", deleted_at=datetime.now(UTC))
         assert await repo.get_user_by_email("deleted@fisherp.local") is None
 
 

@@ -62,7 +62,20 @@ _OPENAPI_TAGS = [
         "description": (
             "Sales invoices billed to a company - draft creation, line items, server-side "
             "financial calculation, and the issue workflow that assigns a permanent number "
-            "and makes the invoice immutable."
+            "and makes the invoice immutable. Once issued, paid_amount/balance_amount/"
+            "status are kept in sync automatically by the payments module's outstanding "
+            "engine as payments are allocated against the invoice."
+        ),
+    },
+    {
+        "name": "payments",
+        "description": (
+            "Payments received from a company - draft creation, search/filter/sort/"
+            "pagination, update/delete while still draft, and allocation against issued "
+            "or partially-paid invoices. Every allocation change recalculates the "
+            "affected invoice's paid_amount/balance_amount/status and its billed "
+            "company's outstanding_amount from source (the outstanding engine). The "
+            "posting workflow lands in a later session."
         ),
     },
     {"name": "health", "description": "Liveness check."},

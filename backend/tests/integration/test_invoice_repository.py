@@ -737,6 +737,165 @@ class TestSearchTenantScoping:
         assert rows[0].id == mine.id
 
 
+class TestSumOpenBalanceByCompany:
+    """InvoiceRepository.sum_open_balance_by_company - Sprint 10 Session 4's
+    outstanding engine input for CompanyService.recalculate_outstanding."""
+
+    async def test_sums_issued_and_partially_paid_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+    ) -> None:
+        await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.ISSUED,
+            total_amount=Decimal("1000.00"),
+            balance_amount=Decimal("1000.00"),
+        )
+        await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.PARTIALLY_PAID,
+            total_amount=Decimal("500.00"),
+            paid_amount=Decimal("200.00"),
+            balance_amount=Decimal("300.00"),
+        )
+
+        total = await repo.sum_open_balance_by_company(company_id, tenant_id)
+        assert total == Decimal("1300.00")
+
+    async def test_excludes_draft_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+    ) -> None:
+        await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.DRAFT,
+            total_amount=Decimal("500.00"),
+            balance_amount=Decimal("500.00"),
+        )
+        total = await repo.sum_open_balance_by_company(company_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_excludes_cancelled_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+    ) -> None:
+        await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.CANCELLED,
+            total_amount=Decimal("500.00"),
+            balance_amount=Decimal("500.00"),
+        )
+        total = await repo.sum_open_balance_by_company(company_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_excludes_paid_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+    ) -> None:
+        """PAID invoices already carry balance_amount == 0, so excluding
+        them wouldn't change the sum, but the exclusion is asserted
+        explicitly rather than incidentally."""
+        await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.PAID,
+            total_amount=Decimal("500.00"),
+            paid_amount=Decimal("500.00"),
+            balance_amount=Decimal("0.00"),
+        )
+        total = await repo.sum_open_balance_by_company(company_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_excludes_soft_deleted_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+    ) -> None:
+        await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.ISSUED,
+            total_amount=Decimal("500.00"),
+            balance_amount=Decimal("500.00"),
+            deleted_at=datetime.now(UTC),
+        )
+        total = await repo.sum_open_balance_by_company(company_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_scoped_to_one_company(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+    ) -> None:
+        other_company = await _make_company(db_session, tenant_id)
+        await _make_invoice(
+            db_session,
+            tenant_id,
+            other_company.id,
+            status=InvoiceStatus.ISSUED,
+            total_amount=Decimal("999.00"),
+            balance_amount=Decimal("999.00"),
+        )
+        total = await repo.sum_open_balance_by_company(company_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_scoped_to_one_tenant(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+    ) -> None:
+        other_tenant = Tenant(
+            name="Other Sum Balance Tenant", slug=f"other-sum-balance-{uuid.uuid4().hex[:8]}"
+        )
+        db_session.add(other_tenant)
+        await db_session.commit()
+        other_company = await _make_company(db_session, other_tenant.id)
+        await _make_invoice(
+            db_session,
+            other_tenant.id,
+            other_company.id,
+            status=InvoiceStatus.ISSUED,
+            total_amount=Decimal("999.00"),
+            balance_amount=Decimal("999.00"),
+        )
+        total = await repo.sum_open_balance_by_company(company_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_no_open_invoices_returns_zero(
+        self, repo: InvoiceRepository, tenant_id: uuid.UUID, company_id: uuid.UUID
+    ) -> None:
+        total = await repo.sum_open_balance_by_company(company_id, tenant_id)
+        assert total == Decimal("0")
+
+
 class TestGetItemById:
     async def test_finds_item_in_own_invoice_and_tenant(
         self,

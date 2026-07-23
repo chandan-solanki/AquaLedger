@@ -3,9 +3,15 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
 from app.core.errors import ConflictError
 from app.modules.companies.constants import CompanyStatus, CompanyType
-from app.modules.companies.exceptions import DuplicateCompanyCodeError, DuplicateCompanyNameError
+from app.modules.companies.exceptions import (
+    CompanyOutstandingCalculationError,
+    DuplicateCompanyCodeError,
+    DuplicateCompanyNameError,
+)
 from app.modules.companies.models import Company
 from app.modules.companies.schemas import CompanyListParams
 from app.modules.companies.service import CompanyService
@@ -42,6 +48,7 @@ class _FakeRepo:
         self.total = total
         self.last_call: dict[str, Any] | None = None
         self.increase_calls: list[tuple[uuid.UUID, uuid.UUID, Decimal]] = []
+        self.set_outstanding_calls: list[tuple[uuid.UUID, uuid.UUID, Decimal]] = []
 
     async def search(self, tenant_id: uuid.UUID, **kwargs: Any) -> tuple[list[Company], int]:
         self.last_call = {"tenant_id": tenant_id, **kwargs}
@@ -51,6 +58,11 @@ class _FakeRepo:
         self, company_id: uuid.UUID, tenant_id: uuid.UUID, amount: Decimal
     ) -> None:
         self.increase_calls.append((company_id, tenant_id, amount))
+
+    async def set_outstanding_amount(
+        self, company_id: uuid.UUID, tenant_id: uuid.UUID, amount: Decimal
+    ) -> None:
+        self.set_outstanding_calls.append((company_id, tenant_id, amount))
 
 
 def _make_company(**overrides: Any) -> Company:
@@ -192,3 +204,46 @@ class TestIncreaseOutstanding:
         await service.increase_outstanding(company_id, Decimal("23875.00"), tenant_id=tenant_id)
 
         assert fake_repo.increase_calls == [(company_id, tenant_id, Decimal("23875.00"))]
+
+
+class TestRecalculateOutstanding:
+    """CompanyService.recalculate_outstanding - Sprint 10 Session 4's
+    outstanding engine. InvoiceService is the only caller; it sums this
+    company's open invoices' balance_amount via its own InvoiceRepository
+    and passes the raw total in - never incremented, always recomputed."""
+
+    async def test_sets_outstanding_to_the_recomputed_total(self) -> None:
+        service, fake_repo = _service_with_fake_repo([], total=0)
+        company_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+
+        await service.recalculate_outstanding(
+            company_id, tenant_id=tenant_id, total_open_balance=Decimal("2500.00")
+        )
+
+        assert fake_repo.set_outstanding_calls == [(company_id, tenant_id, Decimal("2500.00"))]
+
+    async def test_zero_balance_sets_outstanding_to_zero(self) -> None:
+        service, fake_repo = _service_with_fake_repo([], total=0)
+        company_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+
+        await service.recalculate_outstanding(
+            company_id, tenant_id=tenant_id, total_open_balance=Decimal("0")
+        )
+
+        assert fake_repo.set_outstanding_calls == [(company_id, tenant_id, Decimal("0.00"))]
+
+    async def test_negative_total_raises_and_does_not_write(self) -> None:
+        """Not reachable in practice - it is a SUM of balance_amount, which
+        InvoiceService's own reconciliation guard never lets go negative -
+        but CompanyService must not trust an input it did not itself
+        validate, and must not persist a rejected value."""
+        service, fake_repo = _service_with_fake_repo([], total=0)
+
+        with pytest.raises(CompanyOutstandingCalculationError):
+            await service.recalculate_outstanding(
+                uuid.uuid4(), tenant_id=uuid.uuid4(), total_open_balance=Decimal("-0.01")
+            )
+
+        assert fake_repo.set_outstanding_calls == []

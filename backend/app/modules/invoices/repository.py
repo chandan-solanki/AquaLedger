@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -14,6 +15,13 @@ _SORT_COLUMNS: dict[str, Any] = {
     "invoice_number": Invoice.invoice_number,
     "created_at": Invoice.created_at,
 }
+
+# Sprint 10 Session 4 outstanding engine: only ISSUED/PARTIALLY_PAID
+# invoices count toward a company's outstanding_amount. PAID invoices are
+# excluded too - their balance_amount is already 0 so including them
+# wouldn't change the sum - but leaving them out keeps the query's intent
+# ("still-open invoices") explicit rather than incidental.
+_OPEN_INVOICE_STATUSES = (InvoiceStatus.ISSUED, InvoiceStatus.PARTIALLY_PAID)
 
 
 class InvoiceRepository:
@@ -127,6 +135,26 @@ class InvoiceRepository:
         step."""
         self._session.add(invoice)
         return invoice
+
+    async def sum_open_balance_by_company(
+        self, company_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> Decimal:
+        """Sum of balance_amount across every open (see
+        _OPEN_INVOICE_STATUSES) invoice for one company - the source
+        InvoiceService.recalculate_payment_totals recomputes
+        Company.outstanding_amount from
+        (app.modules.payments.domain.reconciliation.calculate_company_outstanding),
+        never patched incrementally (TASKS.md Sprint 10 Session 4: "Do NOT
+        increment/decrement. Recompute.")."""
+        result = await self._session.execute(
+            select(func.coalesce(func.sum(Invoice.balance_amount), 0)).where(
+                Invoice.company_id == company_id,
+                Invoice.tenant_id == tenant_id,
+                Invoice.deleted_at.is_(None),
+                Invoice.status.in_(_OPEN_INVOICE_STATUSES),
+            )
+        )
+        return result.scalar_one()
 
     async def get_item_by_id(
         self, item_id: uuid.UUID, invoice_id: uuid.UUID, tenant_id: uuid.UUID

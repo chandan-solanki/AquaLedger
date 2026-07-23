@@ -176,9 +176,7 @@ class TestCreateBoat:
     async def test_duplicate_registration_number_is_409(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
         company = await _create_company(client, headers)
-        await _create_boat(
-            client, headers, company_id=company["id"], registration_number="DUP-REG"
-        )
+        await _create_boat(client, headers, company_id=company["id"], registration_number="DUP-REG")
         response = await client.post(
             "/api/v1/boats",
             json={
@@ -200,9 +198,7 @@ class TestCreateBoat:
         be a side-channel to probe or attach to other tenants' data."""
         headers = await _admin_headers(client)
 
-        other_tenant = Tenant(
-            name="Foreign Owner Co", slug=f"foreign-owner-{uuid.uuid4().hex[:8]}"
-        )
+        other_tenant = Tenant(name="Foreign Owner Co", slug=f"foreign-owner-{uuid.uuid4().hex[:8]}")
         db_session.add(other_tenant)
         await db_session.commit()
         other_headers = await _make_user_headers(db_session, other_tenant.id, _ALL_BOAT_PERMISSIONS)
@@ -415,9 +411,7 @@ class TestListBoats:
         await db_session.commit()
         headers = await _make_user_headers(db_session, other_tenant.id, _ALL_BOAT_PERMISSIONS)
 
-        await _create_boat(
-            client, headers, boat_type="trawler", is_active=True, name="Match Boat"
-        )
+        await _create_boat(client, headers, boat_type="trawler", is_active=True, name="Match Boat")
         await _create_boat(
             client, headers, boat_type="trawler", is_active=False, name="Inactive Boat"
         )

@@ -36,6 +36,7 @@ from app.modules.invoices.exceptions import (
     InvoiceNotDraftError,
     InvoiceNotFoundError,
     InvoiceNumberConflictError,
+    InvoiceReconciliationError,
 )
 from app.modules.invoices.models import Invoice, InvoiceItem
 from app.modules.invoices.repository import InvoiceRepository
@@ -47,6 +48,10 @@ from app.modules.invoices.schemas import (
     InvoiceListParams,
     InvoiceResponse,
     InvoiceUpdateRequest,
+)
+from app.modules.payments.domain.reconciliation import (
+    ReconciliationError,
+    calculate_invoice_payment,
 )
 from app.modules.trip_catches.exceptions import (
     TripCatchInsufficientQuantityError,
@@ -442,6 +447,56 @@ class InvoiceService:
         await self._commit_or_raise()
         await self._session.refresh(invoice)
         return self._to_response(invoice)
+
+    async def recalculate_payment_totals(
+        self, invoice_id: uuid.UUID, *, tenant_id: uuid.UUID, total_allocated: Decimal
+    ) -> None:
+        """Sprint 10 Session 4's outstanding engine: recomputes this
+        invoice's paid_amount/balance_amount/status from scratch
+        (app.modules.payments.domain.reconciliation.calculate_invoice_payment)
+        and then cascades into recomputing its billed company's
+        outstanding_amount - never patched incrementally, the same
+        recompute-from-source discipline _recalculate_invoice applies to
+        item totals.
+
+        `total_allocated` is the sum of every currently-active allocation
+        against this invoice, across every payment - computed and passed in
+        by PaymentService (via its own PaymentRepository; InvoiceService
+        never touches the payments module's tables, ARCHITECTURE.md §2).
+        Called after every allocation create/update/delete that touches
+        this invoice, from within that same transaction (not committed
+        here - the caller commits once, atomically, the same pattern every
+        other cross-module mutation in this codebase follows).
+
+        Returns nothing: `updated_at`'s server-side onupdate expression
+        leaves the row's in-memory state unrefreshed until the caller's own
+        commit + refresh, so building an InvoiceResponse here (before that
+        happens) would touch an expired attribute mid-transaction - the same
+        reason every other mutation in this codebase defers `_to_response`
+        until after its own `_commit_or_raise`/`refresh`. Callers that need
+        the recalculated invoice re-fetch it via `get()`.
+        """
+        invoice = await self._get_or_raise(invoice_id, tenant_id)
+        try:
+            totals = calculate_invoice_payment(
+                total_amount=invoice.total_amount,
+                total_allocated=total_allocated,
+                current_status=invoice.status,
+            )
+        except ReconciliationError as exc:
+            raise InvoiceReconciliationError(str(exc)) from exc
+
+        invoice.paid_amount = totals.paid_amount
+        invoice.balance_amount = totals.balance_amount
+        invoice.status = totals.status
+        await self._session.flush()
+
+        total_open_balance = await self._repo.sum_open_balance_by_company(
+            invoice.company_id, tenant_id
+        )
+        await self._company_service.recalculate_outstanding(
+            invoice.company_id, tenant_id=tenant_id, total_open_balance=total_open_balance
+        )
 
     async def _allocate_invoice_number(self, invoice: Invoice, tenant_id: uuid.UUID) -> str:
         """Concurrency-safe sequential number allocation (ARCHITECTURE.md

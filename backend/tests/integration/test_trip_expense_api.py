@@ -450,18 +450,14 @@ class TestGetTripExpense:
         headers = await _admin_headers(client)
         created = await _create_trip_expense(client, headers)
 
-        other_tenant = Tenant(
-            name="Other Expense Co", slug=f"other-expense-{uuid.uuid4().hex[:8]}"
-        )
+        other_tenant = Tenant(name="Other Expense Co", slug=f"other-expense-{uuid.uuid4().hex[:8]}")
         db_session.add(other_tenant)
         await db_session.commit()
         other_headers = await _make_user_headers(
             db_session, other_tenant.id, _ALL_TRIP_EXPENSE_PERMISSIONS
         )
 
-        response = await client.get(
-            f"/api/v1/trip-expenses/{created['id']}", headers=other_headers
-        )
+        response = await client.get(f"/api/v1/trip-expenses/{created['id']}", headers=other_headers)
         assert response.status_code == 404
 
 
@@ -523,9 +519,7 @@ class TestListTripExpenses:
         )
 
         marker = uuid.uuid4().hex[:8]
-        target = await _create_trip_expense(
-            client, headers, receipt_number=f"RCPT-{marker}"
-        )
+        target = await _create_trip_expense(client, headers, receipt_number=f"RCPT-{marker}")
         await _create_trip_expense(client, headers, receipt_number=f"OTHER-{marker}-X")
 
         response = await client.get(
@@ -534,9 +528,7 @@ class TestListTripExpenses:
         ids = [e["id"] for e in response.json()["data"]]
         assert ids == [target["id"]]
 
-    async def test_filters_by_trip_id(
-        self, client: AsyncClient, db_session: AsyncSession
-    ) -> None:
+    async def test_filters_by_trip_id(self, client: AsyncClient, db_session: AsyncSession) -> None:
         other_tenant = Tenant(
             name="Trip Filter Expense Tenant", slug=f"trip-filter-exp-{uuid.uuid4().hex[:8]}"
         )
@@ -790,9 +782,7 @@ class TestUpdateTripExpense:
         )
         assert response.status_code == 403
 
-    async def test_partial_update_only_changes_supplied_fields(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_partial_update_only_changes_supplied_fields(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
         created = await _create_trip_expense(client, headers, vendor_name="Sassoon Dock Fuel Co")
 

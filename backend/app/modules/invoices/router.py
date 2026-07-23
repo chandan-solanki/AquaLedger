@@ -331,6 +331,20 @@ _INVOICE_EXAMPLE: dict[str, object] = {
     "updated_at": "2026-07-22T04:00:00Z",
 }
 
+_PARTIALLY_PAID_INVOICE_EXAMPLE: dict[str, object] = {
+    **_ISSUED_INVOICE_EXAMPLE,
+    "status": "partially_paid",
+    "paid_amount": "15000.00",
+    "balance_amount": "8875.00",
+}
+
+_PAID_INVOICE_EXAMPLE: dict[str, object] = {
+    **_ISSUED_INVOICE_EXAMPLE,
+    "status": "paid",
+    "paid_amount": "23875.00",
+    "balance_amount": "0.00",
+}
+
 _LIST_RESPONSE_EXAMPLE: dict[str, object] = {
     "data": [_INVOICE_EXAMPLE],
     "meta": {
@@ -431,10 +445,39 @@ async def list_invoices(
     "/{invoice_id}",
     response_model=InvoiceResponse,
     summary="Get an invoice by id",
+    description=(
+        "`paid_amount`/`balance_amount`/`status` reflect the outstanding engine's latest "
+        "recalculation (Sprint 10 Session 4): `issued` (nothing allocated yet) -> "
+        "`partially_paid` (`balance_amount` > 0) -> `paid` (`balance_amount` == 0), "
+        "driven entirely by payment allocations against this invoice - see the examples."
+    ),
     responses={
         **_COMMON_ERROR_RESPONSES,
         **_NOT_FOUND_RESPONSE,
-        200: {"content": {"application/json": {"example": _INVOICE_EXAMPLE}}},
+        200: {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "draft": {
+                            "summary": "Draft - not yet issued",
+                            "value": _INVOICE_EXAMPLE,
+                        },
+                        "issued": {
+                            "summary": "Issued - no payment allocated yet",
+                            "value": _ISSUED_INVOICE_EXAMPLE,
+                        },
+                        "partially_paid": {
+                            "summary": "Partially paid - some balance remains",
+                            "value": _PARTIALLY_PAID_INVOICE_EXAMPLE,
+                        },
+                        "paid": {
+                            "summary": "Fully paid - balance_amount is 0",
+                            "value": _PAID_INVOICE_EXAMPLE,
+                        },
+                    }
+                }
+            }
+        },
     },
     dependencies=[Depends(require_permission(INVOICE_VIEW))],
 )
@@ -661,8 +704,11 @@ async def delete_invoice_item(
         "`available_quantity` on every referenced trip catch (422 if not, even if it was "
         "sufficient when the item was added - this is the final, lock-protected check). "
         "Once issued, the invoice and its items become fully immutable: no further edit, "
-        "delete, or item CRUD is possible (409 INVOICE_NOT_DRAFT on any attempt). Payment "
-        "allocation, ledger posting, PDF generation and outbox event publishing are not "
+        "delete, or item CRUD is possible (409 INVOICE_NOT_DRAFT on any attempt). From "
+        "this point, `paid_amount`/`balance_amount`/`status` are recalculated automatically "
+        "whenever a payment is allocated against this invoice (see the payments module's "
+        "allocation endpoints) - `issued` -> `partially_paid` -> `paid` as `balance_amount` "
+        "falls to 0. Ledger posting, PDF generation and outbox event publishing are not "
         "implemented yet - reserved for future sprints."
     ),
     responses={

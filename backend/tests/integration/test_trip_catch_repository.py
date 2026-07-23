@@ -444,9 +444,7 @@ class TestSearchFilters:
         trip_id: uuid.UUID,
         fish_id: uuid.UUID,
     ) -> None:
-        target = await _make_trip_catch(
-            db_session, tenant_id, trip_id, fish_id, grade=CatchGrade.A
-        )
+        target = await _make_trip_catch(db_session, tenant_id, trip_id, fish_id, grade=CatchGrade.A)
         await _make_trip_catch(db_session, tenant_id, trip_id, fish_id, grade=CatchGrade.C)
         other_trip = await _fresh_trip_id(db_session, tenant_id)
         await _make_trip_catch(db_session, tenant_id, other_trip, fish_id, grade=CatchGrade.A)

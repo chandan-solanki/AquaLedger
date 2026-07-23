@@ -248,9 +248,7 @@ async def get_trip_expense(
         **_TRIP_NOT_FOUND_RESPONSE,
         **_BUSINESS_RULE_RESPONSE,
         200: {
-            "content": {
-                "application/json": {"example": {**_EXPENSE_EXAMPLE, "amount": "4800.00"}}
-            }
+            "content": {"application/json": {"example": {**_EXPENSE_EXAMPLE, "amount": "4800.00"}}}
         },
     },
     dependencies=[Depends(require_permission(TRIP_EXPENSE_EDIT))],

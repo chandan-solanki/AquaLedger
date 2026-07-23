@@ -50,10 +50,15 @@ class TestSeededRoles:
         # accountant in migration a1c9f7e3d5b2 (Sprint 9 Session 1) - unlike
         # the trip modules, accountant already held invoice:view/create/edit/
         # issue/cancel from the baseline seed, so it gets invoice:delete too.
-        assert counts["super_admin"] == 44
-        assert counts["admin"] == 44
-        assert counts["manager"] == 38
-        assert counts["accountant"] == 23
+        # Plus payment:create/edit/post added for super_admin/admin/manager/
+        # accountant in migration 9d4c1f6a82e7 (Sprint 10 Session 1) - all
+        # four already held payment:record from the baseline seed, the same
+        # "already had the equivalent baseline permission" situation
+        # invoice:delete's accountant grant was in.
+        assert counts["super_admin"] == 47
+        assert counts["admin"] == 47
+        assert counts["manager"] == 41
+        assert counts["accountant"] == 26
         assert counts["operator"] == 3
 
     async def test_operator_is_view_only(self, db_session: AsyncSession) -> None:
@@ -73,11 +78,11 @@ class TestSeededRoles:
 
 
 class TestSeededPermissions:
-    async def test_forty_four_permissions_seeded(self, db_session: AsyncSession) -> None:
+    async def test_forty_seven_permissions_seeded(self, db_session: AsyncSession) -> None:
         count = (
             await db_session.execute(select(func.count()).select_from(Permission))
         ).scalar_one()
-        assert count == 44
+        assert count == 47
 
     async def test_permission_codes_are_unique(self, db_session: AsyncSession) -> None:
         codes = (await db_session.execute(select(Permission.code))).scalars().all()

@@ -1,245 +1,595 @@
-Here is the structured and formatted version of your sprint plan:
+# Sprint 10 – Payment Management
 
-Sprint 9 — Invoice Management
-Goal: Build the complete Invoice Management module. Invoices are the core financial document of FishERP.
+## Sprint Goal
 
-This sprint introduces:
+Implement the complete Payment Management module for FishERP.
 
-Draft invoices
+This module manages:
 
-Invoice items
+- Customer Payments
+- Payment Allocation
+- Outstanding Balance
+- Invoice Settlement
+- Partial Payments
+- Full Payments
 
-Financial calculations
+This sprint integrates with:
 
-Invoice issue workflow
+- Authentication
+- Company
+- Invoice
+- Future Ledger
+- Future Reports
 
-Inventory deduction
+No Ledger implementation in this sprint.
+No PDF generation.
+No Dashboard.
 
-Invoice numbering
+---
 
-Immutable invoices
+# Module Structure
 
-This module will integrate with:
+Create
 
-Company
+app/modules/payments/
 
-Fish
+- router.py
+- service.py
+- repository.py
+- models.py
+- schemas.py
+- dependencies.py
+- permissions.py
+- constants.py
+- exceptions.py
 
-Trip Catch
+Create
 
-Future Payment module
+app/modules/payments/domain/
 
-Future Ledger module
+- allocation.py
+- numbering.py
 
-Session 1 — Module Foundation
-Objective: Create the entire Invoice module structure.
+---
 
-1. Create Module Structure (modules/invoices/)
+# Session 1
+## Database Foundation
 
-__init__.py
+Create
 
-router.py
+Payment
 
-service.py
+PaymentAllocation
 
-repository.py
+Models
 
-models.py
+Schemas
 
-schemas.py
+Constants
 
-exceptions.py
+Exceptions
 
-constants.py
+Permissions
 
-permissions.py
+Dependencies
 
-dependencies.py
+Migration
 
-2. Database Tables
-invoices
+Indexes
 
-Core Fields: id, tenant_id, invoice_number, company_id, invoice_date, due_date
+Relationships
 
-Status Options: Draft, Issued, Paid, Partially Paid, Cancelled
+Swagger Tag
 
-Financial Fields: subtotal, discount_amount, taxable_amount, tax_amount, transport_charge, other_charge, round_off, total_amount, paid_amount, balance_amount
+---
 
-Metadata: Audit fields, Soft delete
+## Payment Table
 
-invoice_items
+Fields
 
-Fields: id, tenant_id, invoice_id, fish_id, trip_catch_id, description, quantity, unit, rate, discount_percent, discount_amount, taxable_amount, tax_rate, tax_amount, line_total
+id
 
-3. Implementation Checklist
+tenant_id
 
-Create Models, Schemas, Exceptions, Constants, Permissions, Dependencies, and Migration.
+payment_number
 
-Setup Indexes, Foreign Keys, Relationships, and Swagger Tags.
+company_id
 
-4. Verify
+payment_date
 
-Migration works and tables are created.
+payment_method
 
-Code is MyPy clean and Ruff clean.
+reference_number
 
-Session 2 — CRUD
-Objective: Implement standard operations across the Repository, Service, and Router.
+bank_name
 
-1. CRUD Operations
+amount
 
-Create Draft Invoice
+allocated_amount
+
+unallocated_amount
+
+remarks
+
+status
+
+created_at
+
+updated_at
+
+deleted_at
+
+created_by
+
+updated_by
+
+deleted_by
+
+---
+
+## Payment Allocation Table
+
+Fields
+
+id
+
+tenant_id
+
+payment_id
+
+invoice_id
+
+allocated_amount
+
+created_at
+
+created_by
+
+---
+
+Relationships
+
+Payment
+
+↓
+
+Payment Allocations
+
+↓
+
+Invoice
+
+---
+
+Indexes
+
+payment_number
+
+company_id
+
+payment_date
+
+status
+
+Soft delete indexes
+
+---
+
+Status
+
+Draft
+
+Posted
+
+Cancelled
+
+---
+
+Migration
+
+Seed permissions
+
+payment:view
+
+payment:create
+
+payment:edit
+
+payment:delete
+
+payment:post
+
+---
+
+Verification
+
+Migration
+
+Ruff
+
+MyPy
+
+Tests
+
+---
+
+# Session 2
+## Draft Payment CRUD
+
+Implement
+
+Repository
+
+Service
+
+Router
+
+CRUD
+
+Create Draft Payment
 
 Update Draft
 
 Delete Draft
 
-Get Invoice
+Get
 
-List Invoices
+List
 
-2. Query Features
+Search
 
-Search: invoice_number, company
+Filtering
 
-Filters: status, company, date_range
+Sorting
 
-Sorting: invoice_date, invoice_number, total, created_at
+Pagination
 
-Pagination: page, page_size
+RBAC
 
-3. RBAC Permissions
+Tenant Isolation
 
-invoice:view
+Soft Delete
 
-invoice:create
+---
 
-invoice:edit
+Search
 
-invoice:delete
+payment_number
 
-4. Verify
+reference_number
 
-CRUD, Search, Pagination, Filtering, Sorting, RBAC, Tenant Isolation, and Soft Delete functionality.
+company_name
 
-Session 3 — Invoice Items
-Objective: Implement invoice_items lifecycle and validation.
+---
 
-1. CRUD Operations
+Filtering
 
-Add Item, Edit Item, Delete Item, List Items
+status
 
-2. Validation Rules
+company
 
-Fish exists.
+payment_method
 
-Trip Catch exists and belongs to the tenant.
+payment_date
 
-Quantity > 0 and Rate ≥ 0.
+---
 
-Validate discounts and taxes.
+Sorting
 
-Inventory: Quantity cannot exceed Trip Catch available quantity.
+payment_date
 
-3. Service Rules
+payment_number
 
-Must use FishService and TripCatchService (never directly access repositories).
+amount
 
-4. Verify
+created_at
 
-Item CRUD, Trip Catch/Fish validation, Inventory validation, RBAC, and Tenant isolation.
+---
 
-Session 4 — Financial Engine
-Objective: Server calculates everything. Ignore client totals.
+Business Rules
 
-1. Rules
+Draft only editable
 
-Use decimals only (never floats).
+Draft only deletable
 
-Recalculate on every update.
+No allocation yet
 
-Reject negative values.
+No posting yet
 
-2. Calculate
+---
 
-Line subtotal and Line discount
+# Session 3
+## Payment Allocation Engine
 
-Taxable amount (GST, CGST, SGST, IGST)
+Implement
 
-Transport and Other Charges
+Payment Allocation CRUD
 
-Round Off
+Allocate payment
 
-Invoice Total, Balance, and Paid Amount
+Remove allocation
 
-3. Verify
+Update allocation
 
-Calculation accuracy, decimal precision, negative value rejection, rounding, and financial totals.
+Validation
 
-Session 5 — Issue Workflow
-Objective: Execute the core invoice issuance logic. (Most important session)
+Invoice exists
 
-Endpoint: POST /invoices/{id}/issue
+Invoice belongs to tenant
 
-1. Workflow Pipeline
-Draft → Validate → Generate Number → Lock Invoice → Calculate Totals → Deduct Trip Catch Quantity → Update Balance → Issued → Immutable
+Invoice status
 
-2. Business Rules
+Amount validation
 
-Cannot issue twice.
+Outstanding validation
 
-Cannot edit or delete an issued invoice.
+Use
 
-Must contain at least one item.
+InvoiceService
 
-Company must be active.
+Never InvoiceRepository
 
-Trip Catch quantity must be available.
+Business Rules
 
-3. Future Proofing (Prepare Hooks)
+Allocated amount
 
-Future Payment, Future Ledger, Future PDF, Future Outbox (No implementation yet).
+<=
 
-4. Verify
+Invoice balance
 
-Issue endpoint, concurrency, Invoice Number generation, inventory deduction, immutability, and integrity errors.
+Payment amount
 
-Session 6 — Testing & Documentation
-1. Testing Scope
+>=
 
-Unit Tests: Exceptions, Schemas, Financial calculations, Service logic.
+Total allocations
 
-Integration Tests: Repository, Issue workflow, Invoice Items.
+Support
 
-API Tests: CRUD, Issue endpoint, RBAC, Search, Pagination, Filtering, Tenant Isolation, Soft Delete, Immutable invoice rules, Inventory deduction.
+Partial Allocation
 
-2. Documentation & Review
+Multiple allocations
 
-Swagger: Add examples, expected responses, and error documentation.
+Unallocated balance
 
-Architecture Review: Check layering, security, performance, test coverage, and identify future improvements.
+Prepare allocation.py
+
+No posting yet
+
+---
+
+# Session 4
+## Outstanding Engine
+
+Server updates
+
+Invoice.paid_amount
+
+Invoice.balance_amount
+
+Invoice.status
+
+Company.outstanding_amount
+
+Rules
+
+ISSUED
+
+↓
+
+PARTIALLY_PAID
+
+↓
+
+PAID
+
+Recalculate after
+
+Allocate
+
+Update Allocation
+
+Remove Allocation
+
+Server owns calculations
+
+Never trust client
+
+Decimal only
+
+ROUND_HALF_UP
+
+---
+
+# Session 5
+## Post Payment Workflow
+
+Endpoint
+
+POST
+
+/api/v1/payments/{payment_id}/post
+
+Workflow
+
+Lock Payment
+
+FOR UPDATE
+
+↓
+
+Validate
+
+↓
+
+Lock Invoices
+
+FOR UPDATE
+
+↓
+
+Apply Allocations
+
+↓
+
+Update Invoice
+
+↓
+
+Update Company
+
+↓
+
+Generate Payment Number
+
+↓
+
+Mark Posted
+
+↓
+
+Commit
+
+Rollback
+
+if anything fails
+
+Business Rules
+
+Cannot post twice
+
+Cannot edit posted payment
+
+Cannot delete posted payment
+
+Payment must have allocations
+
+No overpayment
+
+No negative balance
+
+Prepare
+
+Ledger Hook
+
+Receipt Hook
+
+Outbox Hook
+
+(No implementation)
+
+---
+
+# Session 6
+## Testing
+
+Unit Tests
+
+Repository Tests
+
+Integration Tests
+
+API Tests
+
+Concurrency Tests
+
+Swagger
+
+Architecture Review
+
+Security Review
+
+Performance Review
 
 Definition of Done
-The sprint is complete only if:
 
-[ ] Ruff clean
+---
 
-[ ] MyPy strict clean
+# Verification
 
-[ ] All tests pass
+CRUD
 
-[ ] Alembic migration successful
+Allocation
 
-[ ] Swagger updated
+Outstanding
 
-[ ] RBAC implemented
+Invoice Status
 
-[ ] Tenant isolation verified
+Company Outstanding
 
-[ ] Soft delete verified
+Payment Number
 
-[ ] Financial calculations verified
+Posting
 
-[ ] Invoice issue workflow verified
+RBAC
 
-[ ] Code matches project architecture
+Tenant Isolation
+
+Soft Delete
+
+Concurrency
+
+Rollback
+
+---
+
+# Deliverables
+
+At end of Sprint 10
+
+✓ Payment Module
+
+✓ Payment Allocation
+
+✓ Partial Payments
+
+✓ Full Payments
+
+✓ Outstanding Engine
+
+✓ Invoice Settlement
+
+✓ Payment Numbering
+
+✓ Payment Posting Workflow
+
+✓ Concurrency Protection
+
+✓ Transaction Safety
+
+✓ Swagger
+
+✓ Tests
+
+---
+
+# Definition of Done
+
+Ruff clean
+
+MyPy strict clean
+
+Pytest passing
+
+Alembic migration successful
+
+Swagger updated
+
+RBAC complete
+
+Tenant isolation verified
+
+Soft delete verified
+
+Payment allocation verified
+
+Outstanding calculation verified
+
+Posting workflow verified
+
+Architecture review completed
+
+Security review completed
+
+Performance review completed
+
+Sprint 10 complete

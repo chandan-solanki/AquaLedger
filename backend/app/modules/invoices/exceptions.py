@@ -96,6 +96,20 @@ class InvoiceInsufficientInventoryError(BusinessRuleError):
     code = "INVOICE_INSUFFICIENT_INVENTORY"
 
 
+class InvoiceReconciliationError(BusinessRuleError):
+    """Raised when the outstanding engine
+    (app.modules.payments.domain.reconciliation.calculate_invoice_payment)
+    rejects a recalculated paid_amount/balance_amount, or the invoice's
+    current status is outside the payment lifecycle (draft/cancelled).
+    Defense in depth, not a normal user-facing validation path:
+    PaymentService's allocation ceilings (Session 3) and the "must be
+    issued or partially paid" allocation guard already keep this
+    unreachable in normal use, the same posture InvoiceCalculationError
+    takes for the item-totals engine."""
+
+    code = "INVOICE_RECONCILIATION_ERROR"
+
+
 class InvoiceNumberConflictError(ConflictError):
     """Defensive backstop for the `ix_invoices_tenant_invoice_number` unique
     index firing on commit - should be unreachable given
