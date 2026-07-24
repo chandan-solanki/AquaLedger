@@ -8,11 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
+from app.modules.supplier_payments.domain.reconciliation import (
+    ReconciliationError,
+    calculate_supplier_outstanding,
+)
 from app.modules.suppliers.constants import SupplierStatus
 from app.modules.suppliers.exceptions import (
     DuplicateSupplierCodeError,
     DuplicateSupplierNameError,
     SupplierNotFoundError,
+    SupplierOutstandingCalculationError,
 )
 from app.modules.suppliers.models import Supplier
 from app.modules.suppliers.repository import SupplierRepository
@@ -133,6 +138,28 @@ class SupplierService:
         mutation in this codebase. Mirrors CompanyService.increase_outstanding
         exactly."""
         await self._repo.increase_outstanding_amount(supplier_id, tenant_id, amount)
+
+    async def recalculate_outstanding(
+        self, supplier_id: uuid.UUID, *, tenant_id: uuid.UUID, total_open_balance: Decimal
+    ) -> None:
+        """Sets Supplier.outstanding_amount to the recomputed total - the
+        Sprint 12 Session 4 outstanding engine's "Recompute, do NOT
+        increment/decrement" counterpart to increase_outstanding's atomic
+        +=. `total_open_balance` is the sum of balance_amount across this
+        supplier's open purchase bills, computed and passed in by
+        PurchaseService.recalculate_payment_totals (via its own
+        PurchaseRepository - SupplierService never touches the purchase
+        module's tables, ARCHITECTURE.md §2). The caller owns the
+        transaction and commits; this only stages the write, same as
+        increase_outstanding. Mirrors CompanyService.recalculate_outstanding
+        exactly."""
+        try:
+            outstanding_amount = calculate_supplier_outstanding(
+                total_open_balance=total_open_balance
+            )
+        except ReconciliationError as exc:
+            raise SupplierOutstandingCalculationError(str(exc)) from exc
+        await self._repo.set_outstanding_amount(supplier_id, tenant_id, outstanding_amount)
 
     async def _get_or_raise(self, supplier_id: uuid.UUID, tenant_id: uuid.UUID) -> Supplier:
         supplier = await self._repo.get_by_id(supplier_id, tenant_id)

@@ -1,332 +1,531 @@
-# Sprint 11 – Purchase Management
+# Sprint 12 – Supplier Payment Management
 
 ## Goal
 
-Implement Purchase Management following the same architecture and quality standards as Invoice and Payment Management.
+Implement the complete **Supplier Payment Management** module, completing the **Accounts Payable (AP)** workflow.
+
+This sprint mirrors the Customer Payment module (Sprint 10) while integrating with **Suppliers** and **Purchase Bills**.
+
+---
+
+# Scope
+
+## In Scope
+
+- Supplier Payment CRUD
+- Supplier Payment Allocation
+- Outstanding Reconciliation
+- Payment Posting
+- Concurrency-safe Payment Number Generation
+- RBAC
+- Tenant Isolation
+- Swagger
+- Unit / Repository / Integration / API Tests
+
+## Out of Scope
+
+- Ledger Entries
+- Journal Entries
+- PDF Receipts
+- Email / Notifications
+- Inventory
+- Bank Reconciliation
+- Cheque Bounce
+- GST Filing
 
 ---
 
 # Architecture Rules
 
 - Router → Service → Repository
-- Domain layer for calculations
-- Multi-tenant
+- Domain Layer for calculations
+- Async SQLAlchemy
+- Multi Tenant
 - RBAC
 - Soft Delete
 - Audit Fields
 - Decimal only
 - ROUND_HALF_UP
-- Async SQLAlchemy
-- No cross-module repository access
-- Full Unit + Integration + API tests
+- Never trust client financial values
+- Never access another module's repository directly
+- Cross-module communication only through services
 
 ---
 
-# Session 1 – Supplier & Purchase Foundation
+# Session 1 – Supplier Payment Foundation
 
-## Create Modules
+## Create Module
 
-modules/suppliers/
+backend/app/modules/supplier_payments/
 
-modules/purchase/
+### Create
 
-## Suppliers
+models.py
+
+schemas.py (Response only)
+
+constants.py
+
+exceptions.py
+
+permissions.py
+
+dependencies.py
+
+repository.py (constructor only)
+
+service.py (constructor only)
+
+router.py (0 endpoints)
+
+domain/
+
+__init__.py
+
+allocation.py (placeholder)
+
+numbering.py (placeholder)
+
+reconciliation.py (placeholder)
+
+---
+
+## Database Models
+
+### SupplierPayment
+
+Fields
+
+- id
+- tenant_id
+- supplier_id
+- payment_number (nullable)
+- payment_date
+- payment_method
+- reference_number
+- bank_name
+- amount
+- allocated_amount
+- unallocated_amount
+- remarks
+- status
+- posted_at
+- audit fields
+- soft delete
+
+---
+
+### SupplierPaymentAllocation
+
+Fields
+
+- id
+- tenant_id
+- supplier_payment_id
+- purchase_bill_id
+- allocated_amount
+- created_at
+- created_by
+
+Append-only.
+
+No update/delete timestamps.
+
+---
+
+### SupplierPaymentSequence
+
+Fields
+
+- tenant_id
+- prefix
+- fiscal_year
+- last_number
+
+---
+
+## Relationships
 
 Supplier
 
-Fields
+↓
 
-id
+Supplier Payments
 
-tenant_id
+Supplier Payment
 
-code
+↓
 
-name
+Supplier Payment Allocations
 
-legal_name
+Purchase Bill
 
-gstin
+↓
 
-phone
+Supplier Payment Allocations
 
-email
+---
 
-address
+## Permissions
 
-city
+supplier_payment:view
 
-state
+supplier_payment:create
 
-country
+supplier_payment:edit
 
-contact_person
+supplier_payment:delete
 
-credit_days
+supplier_payment:post
 
-opening_balance
+Seed permissions.
 
-outstanding_amount
+Grant to
+
+- super_admin
+- admin
+- manager
+- accountant
+
+---
+
+## Migrations
+
+Create
+
+supplier_payments
+
+supplier_payment_allocations
+
+supplier_payment_sequences
+
+permission seed
+
+---
+
+## Session 1 Deliverable
+
+Foundation only.
+
+No CRUD.
+
+No allocation.
+
+No posting.
+
+---
+
+# Session 2 – Supplier Payment CRUD
+
+Implement
+
+POST
+
+GET
+
+LIST
+
+PUT
+
+DELETE
+
+for Supplier Payments.
+
+---
+
+## Request Schemas
+
+SupplierPaymentCreateRequest
+
+SupplierPaymentUpdateRequest
+
+SupplierPaymentListParams
+
+Client fields
+
+- supplier_id
+- payment_date
+- payment_method
+- reference_number
+- bank_name
+- amount
+- remarks
+
+Server owned
+
+- payment_number
+- allocated_amount
+- unallocated_amount
+- status
+- posted_at
+
+---
+
+## Validation
+
+Supplier exists
+
+Supplier active
+
+Supplier belongs to tenant
+
+Only SupplierService
+
+Never SupplierRepository
+
+---
+
+## Search
+
+payment_number
+
+reference_number
+
+supplier_name
+
+---
+
+## Filters
 
 status
 
-audit fields
+supplier
 
-soft delete
+payment_method
 
-## Purchase Bills
+payment_date range
 
-PurchaseBill
+---
 
-Fields
+## Sorting
 
-id
+payment_date
 
-tenant_id
+payment_number
 
-supplier_id
+created_at
 
-bill_number
+Default
 
-bill_date
+-created_at
 
-due_date
+---
 
-subtotal
+## Business Rules
 
-discount_amount
+Only DRAFT
 
-tax_amount
+update
 
-transport_charge
+delete
 
-other_charge
+Soft delete only.
 
-round_off
+---
 
-total_amount
+# Session 3 – Allocation Engine
+
+Implement
+
+POST
+
+GET
+
+PUT
+
+DELETE
+
+/payment/{id}/allocations
+
+---
+
+## Validation
+
+Purchase Bill exists
+
+Purchase Bill belongs to tenant
+
+Purchase Bill status
+
+POSTED
+
+PARTIALLY_PAID
+
+Allocation
+
+<= payment.unallocated_amount
+
+<= purchase_bill.balance_amount
+
+---
+
+## Allocation Rules
+
+Support
+
+Partial allocation
+
+Multiple purchase bills
+
+Multiple supplier payments
+
+Recalculate payment allocation totals after every mutation.
+
+Do not update Purchase Bill financials yet.
+
+---
+
+## Domain
+
+Complete
+
+allocation.py
+
+---
+
+# Session 4 – Outstanding Reconciliation
+
+Implement
+
+reconciliation.py
+
+---
+
+## Recalculate Purchase Bill
 
 paid_amount
 
 balance_amount
 
-remarks
-
 status
 
-posted_at
+Transitions
 
-audit fields
+POSTED
 
-soft delete
+↓
 
-PurchaseBillItem
+PARTIALLY_PAID
 
-Fields
+↓
 
-id
+PAID
 
-purchase_bill_id
-
-line_number
-
-description
-
-quantity
-
-unit
-
-rate
-
-discount_percent
-
-discount_amount
-
-tax_rate
-
-tax_amount
-
-line_total
-
-Create
-
-Models
-
-Schemas (Response)
-
-Permissions
-
-Constants
-
-Exceptions
-
-Repository skeleton
-
-Service skeleton
-
-Router skeleton
-
-Migrations
-
-Swagger registration
-
-No CRUD
+Reverse transitions allowed.
 
 ---
 
-# Session 2 – Supplier CRUD + Purchase Bill CRUD
+## Recalculate Supplier
 
-Implement
+Supplier.outstanding_amount
 
-Supplier CRUD
+=
 
-Purchase Bill CRUD
+SUM(open purchase bill balances)
 
-Search
+Never increment.
 
-Filter
-
-Sort
-
-Pagination
-
-Validate Supplier
-
-Draft only edit/delete
-
-Server owns
-
-bill_number
-
-financial fields
-
-status
-
-posted_at
+Always recompute.
 
 ---
 
-# Session 3 – Purchase Bill Items
+## Domain
 
-Implement
+Complete
 
-Add Item
-
-List Items
-
-Update Item
-
-Delete Item
-
-Validate
-
-quantity > 0
-
-rate >= 0
-
-discount %
-
-tax %
-
-Server calculates nothing yet
-
-Support
-
-Multiple Items
-
-Sequential line numbers
-
-Draft only
+reconciliation.py
 
 ---
 
-# Session 4 – Financial Engine
-
-Create
-
-domain/totals.py
-
-Calculate
-
-Line
-
-discount
-
-tax
-
-line_total
+## Business Rules
 
 Purchase Bill
 
-subtotal
+paid_amount <= total_amount
 
-discount
+balance >= 0
 
-tax
-
-charges
-
-round_off
-
-total
-
-paid
-
-balance
+Outstanding >= 0
 
 ROUND_HALF_UP
 
-Recalculate
+---
 
-after every mutation
+# Session 5 – Supplier Payment Posting
 
-Never trust client totals
+Implement
+
+POST
+
+/supplier-payments/{id}/post
 
 ---
 
-# Session 5 – Purchase Posting Workflow
+## Workflow
 
-POST
-
-/purchase/{id}/post
-
-Workflow
-
-Lock Purchase Bill
+Lock Supplier Payment
 
 Validate
 
-Has Items
+Must have allocations
 
-Recalculate
+Recalculate allocation totals
 
-Generate Bill Number
+Allocate payment number
 
-POST
+SPAY/{FY}/{00001}
+
+Mark
+
+POSTED
+
+posted_at
 
 Commit
 
 Rollback on failure
 
-Supplier Outstanding
+---
 
-Recalculate
+## Numbering
 
-Posting makes Purchase Bill immutable
+Complete
 
-Use
+numbering.py
 
-SELECT FOR UPDATE
+Functions
 
-Implement
+fiscal_year_for()
 
-purchase_sequences
+format_payment_number()
 
-Concurrency safe numbering
+---
 
-Format
+## Concurrency
 
-PUR/2026-27/00001
+SELECT ... FOR UPDATE
+
+Supplier Payment
+
+Sequence
+
+Prevent
+
+duplicate posting
+
+duplicate payment numbers
+
+---
+
+## Business Rules
+
+Cannot post twice
+
+Cannot post cancelled
+
+Posted payment immutable
+
+Existing draft guards enforce immutability
 
 ---
 
@@ -342,7 +541,9 @@ Integration Tests
 
 API Tests
 
-Coverage
+---
+
+## Verify
 
 CRUD
 
@@ -350,13 +551,23 @@ RBAC
 
 Tenant Isolation
 
-Business Rules
+Search
 
-Concurrency
+Filters
+
+Sorting
+
+Pagination
+
+Allocation
+
+Outstanding
 
 Posting
 
-Financial Accuracy
+Concurrency
+
+Rollback
 
 Swagger
 
@@ -364,14 +575,43 @@ Swagger
 
 # Quality Gates
 
-Ruff
+Every Session
 
-MyPy strict
+- Ruff clean
+- Ruff format
+- MyPy strict
+- Pytest
+- Alembic
+- OpenAPI builds
+- No migration drift
+- No regressions
 
-Pytest
+---
 
-Alembic
+# Expected Outcome
 
-Swagger
+At the end of Sprint 12 the ERP will have a complete Accounts Payable workflow.
 
-No regressions
+Supplier
+
+↓
+
+Purchase Bill
+
+↓
+
+Supplier Payment
+
+↓
+
+Payment Allocation
+
+↓
+
+Outstanding Cleared
+
+↓
+
+Posted Payment
+
+This completes the Procure-to-Pay financial lifecycle and mirrors the Order-to-Cash architecture already implemented for Companies, Invoices, and Customer Payments.

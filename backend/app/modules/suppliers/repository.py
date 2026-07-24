@@ -115,6 +115,21 @@ class SupplierRepository:
             .values(outstanding_amount=Supplier.outstanding_amount + amount)
         )
 
+    async def set_outstanding_amount(
+        self, supplier_id: uuid.UUID, tenant_id: uuid.UUID, amount: Decimal
+    ) -> None:
+        """Overwrites outstanding_amount with an already-recomputed value -
+        a straight SET, not the atomic += increase_outstanding_amount uses.
+        Used by SupplierService.recalculate_outstanding for the Sprint 12
+        Session 4 outstanding engine (TASKS.md: "Never increment. Always
+        recompute"). Mirrors CompanyRepository.set_outstanding_amount
+        exactly."""
+        await self._session.execute(
+            update(Supplier)
+            .where(Supplier.id == supplier_id, Supplier.tenant_id == tenant_id)
+            .values(outstanding_amount=amount)
+        )
+
     async def find_ids_by_name(self, tenant_id: uuid.UUID, pattern: str) -> list[uuid.UUID]:
         """Supplier ids whose name matches `pattern` (a caller-supplied
         ILIKE pattern), for this tenant. Exists so other modules (purchase)

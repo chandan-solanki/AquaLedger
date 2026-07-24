@@ -15,6 +15,7 @@ from app.modules.fish import models as fish_models  # noqa: F401
 from app.modules.invoices import models as invoices_models  # noqa: F401
 from app.modules.payments import models as payments_models  # noqa: F401
 from app.modules.purchase import models as purchase_models  # noqa: F401
+from app.modules.supplier_payments import models as supplier_payments_models  # noqa: F401
 from app.modules.suppliers import models as suppliers_models  # noqa: F401
 from app.modules.trip_catches import models as trip_catches_models  # noqa: F401
 from app.modules.trip_expenses import models as trip_expenses_models  # noqa: F401

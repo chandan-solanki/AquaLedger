@@ -74,6 +74,20 @@ class PurchaseTotalsInvalidError(BusinessRuleError):
     code = "PURCHASE_TOTALS_INVALID"
 
 
+class PurchaseBillReconciliationError(BusinessRuleError):
+    """Raised when the outstanding engine
+    (app.modules.supplier_payments.domain.reconciliation.calculate_purchase_bill_payment)
+    rejects a recalculated paid_amount/balance_amount, or the purchase bill's
+    current status is outside the payment lifecycle (draft/cancelled).
+    Defense in depth, not a normal user-facing validation path:
+    SupplierPaymentService's allocation ceilings (Session 3) and the "must be
+    posted or partially paid" allocation guard already keep this unreachable
+    in normal use, the same posture PurchaseCalculationError takes for the
+    item-totals engine."""
+
+    code = "PURCHASE_BILL_RECONCILIATION_ERROR"
+
+
 class PurchaseNumberConflictError(ConflictError):
     """Defensive backstop for the `ix_purchase_bills_tenant_bill_number`
     unique index firing on commit - should be unreachable given

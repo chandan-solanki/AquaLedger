@@ -61,10 +61,14 @@ class TestSeededRoles:
         # 578d0e205274 (Sprint 11 Session 1) - unlike every prior module,
         # none of these codes existed in any earlier seed, so all 9 are new
         # to every one of those four roles' counts.
-        assert counts["super_admin"] == 56
-        assert counts["admin"] == 56
-        assert counts["manager"] == 50
-        assert counts["accountant"] == 35
+        # Plus the full supplier_payment:view/create/edit/delete/post surface
+        # (5 new codes) added for super_admin/admin/manager/accountant in
+        # migration 005c4ade9277 (Sprint 12 Session 1) - same as-new-to-
+        # every-role situation supplier:*/purchase:* was in.
+        assert counts["super_admin"] == 61
+        assert counts["admin"] == 61
+        assert counts["manager"] == 55
+        assert counts["accountant"] == 40
         assert counts["operator"] == 3
 
     async def test_operator_is_view_only(self, db_session: AsyncSession) -> None:
@@ -84,11 +88,11 @@ class TestSeededRoles:
 
 
 class TestSeededPermissions:
-    async def test_fifty_six_permissions_seeded(self, db_session: AsyncSession) -> None:
+    async def test_sixty_one_permissions_seeded(self, db_session: AsyncSession) -> None:
         count = (
             await db_session.execute(select(func.count()).select_from(Permission))
         ).scalar_one()
-        assert count == 56
+        assert count == 61
 
     async def test_permission_codes_are_unique(self, db_session: AsyncSession) -> None:
         codes = (await db_session.execute(select(Permission.code))).scalars().all()

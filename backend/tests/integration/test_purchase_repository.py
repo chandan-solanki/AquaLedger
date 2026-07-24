@@ -894,3 +894,160 @@ class TestSequenceRow:
         await repo.ensure_sequence_row(other_tenant.id, "PUR", "2026-27")
         theirs = await repo.get_sequence_for_update(other_tenant.id, "PUR", "2026-27")
         assert theirs.last_number == 0
+
+
+class TestSumOpenBalanceBySupplier:
+    """PurchaseRepository.sum_open_balance_by_supplier - Sprint 12 Session
+    4's outstanding engine input for SupplierService.recalculate_outstanding."""
+
+    async def test_sums_posted_and_partially_paid_bills(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            status=PurchaseStatus.POSTED,
+            total_amount=Decimal("1000.00"),
+            balance_amount=Decimal("1000.00"),
+        )
+        await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            status=PurchaseStatus.PARTIALLY_PAID,
+            total_amount=Decimal("500.00"),
+            paid_amount=Decimal("200.00"),
+            balance_amount=Decimal("300.00"),
+        )
+
+        total = await repo.sum_open_balance_by_supplier(supplier_id, tenant_id)
+        assert total == Decimal("1300.00")
+
+    async def test_excludes_draft_bills(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            status=PurchaseStatus.DRAFT,
+            total_amount=Decimal("500.00"),
+            balance_amount=Decimal("500.00"),
+        )
+        total = await repo.sum_open_balance_by_supplier(supplier_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_excludes_cancelled_bills(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            status=PurchaseStatus.CANCELLED,
+            total_amount=Decimal("500.00"),
+            balance_amount=Decimal("500.00"),
+        )
+        total = await repo.sum_open_balance_by_supplier(supplier_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_excludes_paid_bills(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            status=PurchaseStatus.PAID,
+            total_amount=Decimal("500.00"),
+            paid_amount=Decimal("500.00"),
+            balance_amount=Decimal("0.00"),
+        )
+        total = await repo.sum_open_balance_by_supplier(supplier_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_excludes_soft_deleted_bills(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            status=PurchaseStatus.POSTED,
+            total_amount=Decimal("500.00"),
+            balance_amount=Decimal("500.00"),
+            deleted_at=datetime.now(UTC),
+        )
+        total = await repo.sum_open_balance_by_supplier(supplier_id, tenant_id)
+        assert total == Decimal("0")
+
+    async def test_scoped_to_one_supplier(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            status=PurchaseStatus.POSTED,
+            total_amount=Decimal("500.00"),
+            balance_amount=Decimal("500.00"),
+        )
+        other_supplier = await _make_supplier(db_session, tenant_id)
+        await _make_bill(
+            db_session,
+            tenant_id,
+            other_supplier.id,
+            status=PurchaseStatus.POSTED,
+            total_amount=Decimal("999.00"),
+            balance_amount=Decimal("999.00"),
+        )
+
+        total = await repo.sum_open_balance_by_supplier(supplier_id, tenant_id)
+        assert total == Decimal("500.00")
+
+    async def test_zero_when_no_bills(
+        self, repo: PurchaseRepository, tenant_id: uuid.UUID, supplier_id: uuid.UUID
+    ) -> None:
+        assert await repo.sum_open_balance_by_supplier(supplier_id, tenant_id) == Decimal("0")
+
+    async def test_scoped_to_one_tenant(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            status=PurchaseStatus.POSTED,
+            total_amount=Decimal("500.00"),
+            balance_amount=Decimal("500.00"),
+        )
+        assert await repo.sum_open_balance_by_supplier(supplier_id, uuid.uuid4()) == Decimal("0")
