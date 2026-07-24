@@ -12,6 +12,7 @@ from app.modules.purchase.exceptions import (
     PurchaseBillItemNotFoundError,
     PurchaseBillNotDraftError,
     PurchaseBillNotFoundError,
+    PurchaseBillReconciliationError,
     PurchaseBillSupplierInactiveError,
     PurchaseBillSupplierNotFoundError,
     PurchaseNumberConflictError,
@@ -70,6 +71,7 @@ class _FakeSupplierService:
         self._name_matches = name_matches or []
         self.get_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
         self.find_ids_by_name_calls: list[tuple[uuid.UUID, str]] = []
+        self.recalculate_outstanding_calls: list[tuple[uuid.UUID, uuid.UUID, Decimal]] = []
 
     async def get(self, supplier_id: uuid.UUID, *, tenant_id: uuid.UUID) -> SupplierResponse:
         self.get_calls.append((supplier_id, tenant_id))
@@ -81,6 +83,11 @@ class _FakeSupplierService:
     async def find_ids_by_name(self, tenant_id: uuid.UUID, q: str) -> list[uuid.UUID]:
         self.find_ids_by_name_calls.append((tenant_id, q))
         return self._name_matches
+
+    async def recalculate_outstanding(
+        self, supplier_id: uuid.UUID, *, tenant_id: uuid.UUID, total_open_balance: Decimal
+    ) -> None:
+        self.recalculate_outstanding_calls.append((supplier_id, tenant_id, total_open_balance))
 
 
 def _make_supplier_response(**overrides: Any) -> SupplierResponse:
@@ -656,3 +663,156 @@ class TestAllocatePurchaseNumber:
         await service._allocate_purchase_number(bill, tenant_id)
 
         assert fake_repo.ensure_sequence_calls == [(tenant_id, "PUR", "2026-27")]
+
+
+class _FakeReconciliationRepo:
+    """Stands in for PurchaseRepository across recalculate_payment_totals'
+    call surface - the tenant-scoped lookup and the supplier open-balance
+    aggregation."""
+
+    def __init__(self) -> None:
+        self.by_id: dict[uuid.UUID, PurchaseBill] = {}
+        self.open_balance_by_supplier: dict[uuid.UUID, Decimal] = {}
+        self.sum_open_balance_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
+
+    async def get_by_id(
+        self, purchase_bill_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> PurchaseBill | None:
+        return self.by_id.get(purchase_bill_id)
+
+    async def sum_open_balance_by_supplier(
+        self, supplier_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> Decimal:
+        self.sum_open_balance_calls.append((supplier_id, tenant_id))
+        return self.open_balance_by_supplier.get(supplier_id, Decimal("0"))
+
+
+class _FakeFlushSession:
+    """Stands in for AsyncSession - recalculate_payment_totals only ever
+    calls .flush() on it (the happy-path commit/refresh belongs to the
+    caller, SupplierPaymentService, and is integration-tested instead)."""
+
+    def __init__(self) -> None:
+        self.flush_calls = 0
+
+    async def flush(self) -> None:
+        self.flush_calls += 1
+
+
+def _reconciliation_service_with_fakes(
+    *, bill: PurchaseBill | None, open_balance_by_supplier: Decimal = Decimal("0")
+) -> tuple[PurchaseService, _FakeReconciliationRepo, _FakeSupplierService, _FakeFlushSession]:
+    service = PurchaseService.__new__(PurchaseService)
+    fake_repo = _FakeReconciliationRepo()
+    if bill is not None:
+        fake_repo.by_id[bill.id] = bill
+        fake_repo.open_balance_by_supplier[bill.supplier_id] = open_balance_by_supplier
+    fake_supplier_service = _FakeSupplierService()
+    fake_session = _FakeFlushSession()
+    service._repo = fake_repo  # type: ignore[assignment]
+    service._supplier_service = fake_supplier_service  # type: ignore[assignment]
+    service._session = fake_session  # type: ignore[assignment]
+    return service, fake_repo, fake_supplier_service, fake_session
+
+
+class TestRecalculatePaymentTotals:
+    """PurchaseService.recalculate_payment_totals - Sprint 12 Session 4's
+    outstanding engine. SupplierPaymentService is the only caller; it
+    computes total_allocated via its own SupplierPaymentRepository and
+    passes it in."""
+
+    async def test_zero_allocated_leaves_the_bill_posted(self) -> None:
+        bill = _make_purchase_bill(status=PurchaseStatus.POSTED, total_amount=Decimal("1000.00"))
+        service, _, _, _ = _reconciliation_service_with_fakes(bill=bill)
+
+        await service.recalculate_payment_totals(
+            bill.id, tenant_id=bill.tenant_id, total_allocated=Decimal("0")
+        )
+
+        assert bill.paid_amount == Decimal("0.00")
+        assert bill.balance_amount == Decimal("1000.00")
+        assert bill.status == PurchaseStatus.POSTED
+
+    async def test_partial_allocation_moves_the_bill_to_partially_paid(self) -> None:
+        bill = _make_purchase_bill(status=PurchaseStatus.POSTED, total_amount=Decimal("1000.00"))
+        service, _, _, _ = _reconciliation_service_with_fakes(bill=bill)
+
+        await service.recalculate_payment_totals(
+            bill.id, tenant_id=bill.tenant_id, total_allocated=Decimal("400.00")
+        )
+
+        assert bill.paid_amount == Decimal("400.00")
+        assert bill.balance_amount == Decimal("600.00")
+        assert bill.status == PurchaseStatus.PARTIALLY_PAID
+
+    async def test_full_allocation_moves_the_bill_to_paid(self) -> None:
+        bill = _make_purchase_bill(
+            status=PurchaseStatus.PARTIALLY_PAID, total_amount=Decimal("1000.00")
+        )
+        service, _, _, _ = _reconciliation_service_with_fakes(bill=bill)
+
+        await service.recalculate_payment_totals(
+            bill.id, tenant_id=bill.tenant_id, total_allocated=Decimal("1000.00")
+        )
+
+        assert bill.status == PurchaseStatus.PAID
+
+    async def test_removing_allocations_moves_a_paid_bill_back_down(self) -> None:
+        bill = _make_purchase_bill(status=PurchaseStatus.PAID, total_amount=Decimal("1000.00"))
+        service, _, _, _ = _reconciliation_service_with_fakes(bill=bill)
+
+        await service.recalculate_payment_totals(
+            bill.id, tenant_id=bill.tenant_id, total_allocated=Decimal("250.00")
+        )
+
+        assert bill.status == PurchaseStatus.PARTIALLY_PAID
+        assert bill.balance_amount == Decimal("750.00")
+
+    async def test_draft_bill_raises_reconciliation_error(self) -> None:
+        """Not reachable through the API - an allocation can only ever be
+        created against a POSTED/PARTIALLY_PAID bill - but this module must
+        not silently recalculate one outside the payment lifecycle."""
+        bill = _make_purchase_bill(status=PurchaseStatus.DRAFT, total_amount=Decimal("1000.00"))
+        service, _, _, _ = _reconciliation_service_with_fakes(bill=bill)
+
+        with pytest.raises(PurchaseBillReconciliationError):
+            await service.recalculate_payment_totals(
+                bill.id, tenant_id=bill.tenant_id, total_allocated=Decimal("0")
+            )
+
+    async def test_raises_not_found_when_bill_missing(self) -> None:
+        service, _, _, _ = _reconciliation_service_with_fakes(bill=None)
+
+        with pytest.raises(PurchaseBillNotFoundError):
+            await service.recalculate_payment_totals(
+                uuid.uuid4(), tenant_id=uuid.uuid4(), total_allocated=Decimal("0")
+            )
+
+    async def test_flushes_before_summing_the_suppliers_open_balance(self) -> None:
+        """recalculate_payment_totals must flush its own bill.balance_amount
+        write before reading sum_open_balance_by_supplier - this session's
+        autoflush is disabled (app.db.session), so without an explicit flush
+        that SUM would read a stale balance_amount for this very bill."""
+        bill = _make_purchase_bill(status=PurchaseStatus.POSTED, total_amount=Decimal("1000.00"))
+        service, fake_repo, _, fake_session = _reconciliation_service_with_fakes(bill=bill)
+
+        await service.recalculate_payment_totals(
+            bill.id, tenant_id=bill.tenant_id, total_allocated=Decimal("400.00")
+        )
+
+        assert fake_session.flush_calls == 1
+        assert fake_repo.sum_open_balance_calls == [(bill.supplier_id, bill.tenant_id)]
+
+    async def test_cascades_into_supplier_outstanding_recalculation(self) -> None:
+        bill = _make_purchase_bill(status=PurchaseStatus.POSTED, total_amount=Decimal("1000.00"))
+        service, _, fake_supplier_service, _ = _reconciliation_service_with_fakes(
+            bill=bill, open_balance_by_supplier=Decimal("2500.00")
+        )
+
+        await service.recalculate_payment_totals(
+            bill.id, tenant_id=bill.tenant_id, total_allocated=Decimal("400.00")
+        )
+
+        assert fake_supplier_service.recalculate_outstanding_calls == [
+            (bill.supplier_id, bill.tenant_id, Decimal("2500.00"))
+        ]

@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, or_, select, update
@@ -14,6 +15,14 @@ _SORT_COLUMNS: dict[str, Any] = {
     "bill_number": PurchaseBill.bill_number,
     "created_at": PurchaseBill.created_at,
 }
+
+# Bills outside these two statuses (draft, cancelled, paid) don't contribute
+# to a supplier's outstanding balance - draft/cancelled were never posted,
+# and paid's balance_amount is already 0 so including it wouldn't change the
+# sum - but leaving it out keeps the query's intent ("still-open bills")
+# explicit rather than incidental. Mirrors invoices/repository.py's
+# _OPEN_INVOICE_STATUSES exactly.
+_OPEN_PURCHASE_BILL_STATUSES = (PurchaseStatus.POSTED, PurchaseStatus.PARTIALLY_PAID)
 _ITEM_SORT_COLUMNS: dict[str, Any] = {
     "line_number": PurchaseBillItem.line_number,
     "description": PurchaseBillItem.description,
@@ -256,5 +265,26 @@ class PurchaseRepository:
                 PurchaseSequence.fiscal_year == fiscal_year,
             )
             .with_for_update()
+        )
+        return result.scalar_one()
+
+    async def sum_open_balance_by_supplier(
+        self, supplier_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> Decimal:
+        """Sum of balance_amount across every open (see
+        _OPEN_PURCHASE_BILL_STATUSES) purchase bill for one supplier - the
+        source PurchaseService.recalculate_payment_totals recomputes
+        Supplier.outstanding_amount from
+        (app.modules.supplier_payments.domain.reconciliation.calculate_supplier_outstanding),
+        never patched incrementally (TASKS.md Sprint 12 Session 4: "Never
+        increment. Always recompute from source."). Mirrors
+        InvoiceRepository.sum_open_balance_by_company exactly."""
+        result = await self._session.execute(
+            select(func.coalesce(func.sum(PurchaseBill.balance_amount), 0)).where(
+                PurchaseBill.supplier_id == supplier_id,
+                PurchaseBill.tenant_id == tenant_id,
+                PurchaseBill.deleted_at.is_(None),
+                PurchaseBill.status.in_(_OPEN_PURCHASE_BILL_STATUSES),
+            )
         )
         return result.scalar_one()

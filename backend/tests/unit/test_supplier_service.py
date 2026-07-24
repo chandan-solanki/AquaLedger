@@ -3,11 +3,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
 from app.core.errors import ConflictError
 from app.modules.suppliers.constants import SupplierStatus
 from app.modules.suppliers.exceptions import (
     DuplicateSupplierCodeError,
     DuplicateSupplierNameError,
+    SupplierOutstandingCalculationError,
 )
 from app.modules.suppliers.models import Supplier
 from app.modules.suppliers.schemas import SupplierListParams
@@ -45,6 +48,7 @@ class _FakeRepo:
         self.total = total
         self.last_call: dict[str, Any] | None = None
         self.increase_calls: list[tuple[uuid.UUID, uuid.UUID, Decimal]] = []
+        self.set_outstanding_calls: list[tuple[uuid.UUID, uuid.UUID, Decimal]] = []
 
     async def search(self, tenant_id: uuid.UUID, **kwargs: Any) -> tuple[list[Supplier], int]:
         self.last_call = {"tenant_id": tenant_id, **kwargs}
@@ -54,6 +58,11 @@ class _FakeRepo:
         self, supplier_id: uuid.UUID, tenant_id: uuid.UUID, amount: Decimal
     ) -> None:
         self.increase_calls.append((supplier_id, tenant_id, amount))
+
+    async def set_outstanding_amount(
+        self, supplier_id: uuid.UUID, tenant_id: uuid.UUID, amount: Decimal
+    ) -> None:
+        self.set_outstanding_calls.append((supplier_id, tenant_id, amount))
 
 
 def _make_supplier(**overrides: Any) -> Supplier:
@@ -98,6 +107,50 @@ class TestIncreaseOutstanding:
         await service.increase_outstanding(supplier_id, Decimal("23625.00"), tenant_id=tenant_id)
 
         assert fake_repo.increase_calls == [(supplier_id, tenant_id, Decimal("23625.00"))]
+
+
+class TestRecalculateOutstanding:
+    """SupplierService.recalculate_outstanding - Sprint 12 Session 4's
+    outstanding engine. PurchaseService is the only caller; it sums this
+    supplier's open purchase bills' balance_amount via its own
+    PurchaseRepository and passes the raw total in - never incremented,
+    always recomputed."""
+
+    async def test_sets_outstanding_to_the_recomputed_total(self) -> None:
+        service, fake_repo = _service_with_fake_repo([], total=0)
+        supplier_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+
+        await service.recalculate_outstanding(
+            supplier_id, tenant_id=tenant_id, total_open_balance=Decimal("2500.00")
+        )
+
+        assert fake_repo.set_outstanding_calls == [(supplier_id, tenant_id, Decimal("2500.00"))]
+
+    async def test_zero_balance_sets_outstanding_to_zero(self) -> None:
+        service, fake_repo = _service_with_fake_repo([], total=0)
+        supplier_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+
+        await service.recalculate_outstanding(
+            supplier_id, tenant_id=tenant_id, total_open_balance=Decimal("0")
+        )
+
+        assert fake_repo.set_outstanding_calls == [(supplier_id, tenant_id, Decimal("0.00"))]
+
+    async def test_negative_total_raises_and_does_not_write(self) -> None:
+        """Not reachable in practice - it is a SUM of balance_amount, which
+        PurchaseService's own reconciliation guard never lets go negative -
+        but SupplierService must not trust an input it did not itself
+        validate, and must not persist a rejected value."""
+        service, fake_repo = _service_with_fake_repo([], total=0)
+
+        with pytest.raises(SupplierOutstandingCalculationError):
+            await service.recalculate_outstanding(
+                uuid.uuid4(), tenant_id=uuid.uuid4(), total_open_balance=Decimal("-0.01")
+            )
+
+        assert fake_repo.set_outstanding_calls == []
 
 
 class TestTranslateIntegrityError:

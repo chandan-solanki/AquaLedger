@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -394,3 +395,46 @@ class TestFindIdsByName:
 
         ids = await repo.find_ids_by_name(tenant_id, "%coastal%")
         assert ids == []
+
+
+class TestSetOutstandingAmount:
+    """SupplierService.recalculate_outstanding's straight SET (Sprint 12
+    Session 4's outstanding engine) - distinct from
+    increase_outstanding_amount's atomic += used by the Sprint 11 Session 5
+    posting workflow."""
+
+    async def test_overwrites_with_the_given_amount(
+        self, repo: SupplierRepository, db_session: AsyncSession, tenant_id: uuid.UUID
+    ) -> None:
+        supplier = await _make_supplier(db_session, tenant_id, outstanding_amount=Decimal("999.00"))
+
+        await repo.set_outstanding_amount(supplier.id, tenant_id, Decimal("2500.00"))
+        await db_session.commit()
+
+        refetched = await repo.get_by_id(supplier.id, tenant_id)
+        assert refetched is not None
+        assert refetched.outstanding_amount == Decimal("2500.00")
+
+    async def test_can_set_back_to_zero(
+        self, repo: SupplierRepository, db_session: AsyncSession, tenant_id: uuid.UUID
+    ) -> None:
+        supplier = await _make_supplier(db_session, tenant_id, outstanding_amount=Decimal("500.00"))
+
+        await repo.set_outstanding_amount(supplier.id, tenant_id, Decimal("0"))
+        await db_session.commit()
+
+        refetched = await repo.get_by_id(supplier.id, tenant_id)
+        assert refetched is not None
+        assert refetched.outstanding_amount == Decimal("0.00")
+
+    async def test_scoped_to_the_given_tenant(
+        self, repo: SupplierRepository, db_session: AsyncSession, tenant_id: uuid.UUID
+    ) -> None:
+        supplier = await _make_supplier(db_session, tenant_id, outstanding_amount=Decimal("100.00"))
+
+        await repo.set_outstanding_amount(supplier.id, uuid.uuid4(), Decimal("999.00"))
+        await db_session.commit()
+
+        refetched = await repo.get_by_id(supplier.id, tenant_id)
+        assert refetched is not None
+        assert refetched.outstanding_amount == Decimal("100.00")  # unchanged

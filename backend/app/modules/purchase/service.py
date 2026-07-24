@@ -21,6 +21,7 @@ from app.modules.purchase.exceptions import (
     PurchaseBillItemNotFoundError,
     PurchaseBillNotDraftError,
     PurchaseBillNotFoundError,
+    PurchaseBillReconciliationError,
     PurchaseBillSupplierInactiveError,
     PurchaseBillSupplierNotFoundError,
     PurchaseCalculationError,
@@ -37,6 +38,10 @@ from app.modules.purchase.schemas import (
     PurchaseBillListParams,
     PurchaseBillResponse,
     PurchaseBillUpdateRequest,
+)
+from app.modules.supplier_payments.domain.reconciliation import (
+    ReconciliationError,
+    calculate_purchase_bill_payment,
 )
 from app.modules.suppliers.constants import SupplierStatus
 from app.modules.suppliers.exceptions import SupplierNotFoundError
@@ -356,6 +361,46 @@ class PurchaseService:
         await self._commit_or_raise()
         await self._session.refresh(purchase_bill)
         return self._to_response(purchase_bill)
+
+    async def recalculate_payment_totals(
+        self, purchase_bill_id: uuid.UUID, *, tenant_id: uuid.UUID, total_allocated: Decimal
+    ) -> None:
+        """Sprint 12 Session 4's outstanding engine: recomputes this
+        purchase bill's paid_amount/balance_amount/status from scratch
+        (app.modules.supplier_payments.domain.reconciliation.calculate_purchase_bill_payment)
+        and then cascades into recomputing its supplier's outstanding_amount -
+        never patched incrementally, the same recompute-from-source
+        discipline _recalculate_purchase_bill applies to item totals.
+
+        `total_allocated` is the sum of every currently-active allocation
+        against this purchase bill, across every supplier payment - computed
+        and passed in by SupplierPaymentService (via its own
+        SupplierPaymentRepository; PurchaseService never touches the
+        supplier_payments module's tables, ARCHITECTURE.md §2). Called after
+        every allocation create/update/delete that touches this purchase
+        bill (mirrors InvoiceService.recalculate_payment_totals exactly).
+        """
+        purchase_bill = await self._get_or_raise(purchase_bill_id, tenant_id)
+        try:
+            totals = calculate_purchase_bill_payment(
+                total_amount=purchase_bill.total_amount,
+                total_allocated=total_allocated,
+                current_status=purchase_bill.status,
+            )
+        except ReconciliationError as exc:
+            raise PurchaseBillReconciliationError(str(exc)) from exc
+
+        purchase_bill.paid_amount = totals.paid_amount
+        purchase_bill.balance_amount = totals.balance_amount
+        purchase_bill.status = totals.status
+        await self._session.flush()
+
+        total_open_balance = await self._repo.sum_open_balance_by_supplier(
+            purchase_bill.supplier_id, tenant_id
+        )
+        await self._supplier_service.recalculate_outstanding(
+            purchase_bill.supplier_id, tenant_id=tenant_id, total_open_balance=total_open_balance
+        )
 
     async def _allocate_purchase_number(
         self, purchase_bill: PurchaseBill, tenant_id: uuid.UUID

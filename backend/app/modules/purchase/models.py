@@ -12,6 +12,7 @@ from app.db.base import Base, TimestampMixin
 from app.modules.purchase.constants import PurchaseStatus
 
 if TYPE_CHECKING:
+    from app.modules.supplier_payments.models import SupplierPaymentAllocation
     from app.modules.suppliers.models import Supplier
 
 
@@ -100,6 +101,9 @@ class PurchaseBill(TimestampMixin, Base):
     supplier: Mapped["Supplier"] = relationship(back_populates="purchase_bills")
     items: Mapped[list["PurchaseBillItem"]] = relationship(
         back_populates="purchase_bill", order_by="PurchaseBillItem.line_number"
+    )
+    supplier_payment_allocations: Mapped[list["SupplierPaymentAllocation"]] = relationship(
+        back_populates="purchase_bill"
     )
 
     __table_args__ = (

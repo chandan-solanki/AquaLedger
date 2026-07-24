@@ -78,6 +78,17 @@ _OPENAPI_TAGS = [
             "posting workflow lands in a later session."
         ),
     },
+    {
+        "name": "supplier-payments",
+        "description": (
+            "Payments made to a supplier - draft creation, search/filter/sort/"
+            "pagination, update/delete while still draft (Sprint 12 Session 2). "
+            "supplier_id must reference an active supplier for the caller's tenant. "
+            "Allocation against purchase bills, outstanding reconciliation and the "
+            "posting workflow land in later sessions, mirroring the payments module's "
+            "own build order."
+        ),
+    },
     {"name": "health", "description": "Liveness check."},
 ]
 

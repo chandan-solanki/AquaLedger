@@ -4,6 +4,8 @@ from enum import StrEnum
 class PurchaseStatus(StrEnum):
     DRAFT = "draft"
     POSTED = "posted"
+    PARTIALLY_PAID = "partially_paid"
+    PAID = "paid"
     CANCELLED = "cancelled"
 
 

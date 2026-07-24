@@ -263,6 +263,18 @@ _POSTED_PURCHASE_BILL_EXAMPLE: dict[str, object] = {
     "status": "posted",
     "posted_at": "2026-07-23T04:05:00Z",
 }
+_PARTIALLY_PAID_PURCHASE_BILL_EXAMPLE: dict[str, object] = {
+    **_POSTED_PURCHASE_BILL_EXAMPLE,
+    "status": "partially_paid",
+    "paid_amount": "15000.00",
+    "balance_amount": "8625.00",
+}
+_PAID_PURCHASE_BILL_EXAMPLE: dict[str, object] = {
+    **_POSTED_PURCHASE_BILL_EXAMPLE,
+    "status": "paid",
+    "paid_amount": "23625.00",
+    "balance_amount": "0.00",
+}
 _LIST_RESPONSE_EXAMPLE: dict[str, object] = {
     "data": [_PURCHASE_BILL_EXAMPLE],
     "meta": {
@@ -363,10 +375,40 @@ async def list_purchase_bills(
     "/{purchase_bill_id}",
     response_model=PurchaseBillResponse,
     summary="Get a purchase bill by id",
+    description=(
+        "`paid_amount`/`balance_amount`/`status` reflect the outstanding engine's latest "
+        "recalculation (Sprint 12 Session 4): `posted` (nothing allocated yet) -> "
+        "`partially_paid` (`balance_amount` > 0) -> `paid` (`balance_amount` == 0), "
+        "driven entirely by supplier payment allocations against this bill - see the "
+        "examples."
+    ),
     responses={
         **_COMMON_ERROR_RESPONSES,
         **_NOT_FOUND_RESPONSE,
-        200: {"content": {"application/json": {"example": _PURCHASE_BILL_EXAMPLE}}},
+        200: {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "draft": {
+                            "summary": "Draft - not yet posted",
+                            "value": _PURCHASE_BILL_EXAMPLE,
+                        },
+                        "posted": {
+                            "summary": "Posted - no payment allocated yet",
+                            "value": _POSTED_PURCHASE_BILL_EXAMPLE,
+                        },
+                        "partially_paid": {
+                            "summary": "Partially paid - some balance remains",
+                            "value": _PARTIALLY_PAID_PURCHASE_BILL_EXAMPLE,
+                        },
+                        "paid": {
+                            "summary": "Fully paid - balance_amount is 0",
+                            "value": _PAID_PURCHASE_BILL_EXAMPLE,
+                        },
+                    }
+                }
+            }
+        },
     },
     dependencies=[Depends(require_permission(PURCHASE_VIEW))],
 )
@@ -582,8 +624,13 @@ async def delete_purchase_bill_item(
         "`draft` status (409 if already posted or cancelled) and at least one item "
         "(422 if empty). Once posted, the purchase bill and its items become fully "
         "immutable: no further edit, delete, or item CRUD is possible (409 "
-        "PURCHASE_BILL_NOT_DRAFT on any attempt). Supplier payments, ledger entries, "
-        "PDF generation, notifications, inventory and journal entries are not "
+        "PURCHASE_BILL_NOT_DRAFT on any attempt). From this point, `paid_amount`/"
+        "`balance_amount`/`status` are recalculated automatically whenever a supplier "
+        "payment is allocated against this bill (see the supplier-payments module's "
+        "allocation endpoints) - `posted` -> `partially_paid` -> `paid` as "
+        "`balance_amount` falls to 0, which in turn recalculates the billing "
+        "supplier's `outstanding_amount` from the sum of every still-open bill. Ledger "
+        "entries, PDF generation, notifications, inventory and journal entries are not "
         "implemented yet - reserved for future sprints."
     ),
     responses={
