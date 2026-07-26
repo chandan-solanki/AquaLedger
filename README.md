@@ -1,6 +1,10 @@
 # AquaLedger
 uv run uvicorn app.main:app --reload
 
+admin@fisherp.local
+
+psql -h localhost -p 5432 -U fisherp -d fisherp
+
 Completed Modules
 
 ✅ Foundation

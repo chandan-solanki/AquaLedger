@@ -5,7 +5,7 @@ export function SidebarBrand() {
   return (
     <Link
       href="/dashboard"
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sidebar-foreground"
+      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sidebar-foreground group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
     >
       <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
         <Fish className="size-4" aria-hidden />

@@ -4,7 +4,7 @@ The Next.js 15 frontend for AquaLedger — an ERP for the seafood trading indust
 
 ## Stack
 
-Next.js 15 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS v4 · shadcn/ui (New York, Slate) · TanStack Query · TanStack Table v8 · Axios · React Hook Form + Zod · Recharts · next-themes · Sonner
+Next.js 15 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS v4 · shadcn/ui (New York, Slate) · TanStack Query · TanStack Table v8 · nuqs · Axios · React Hook Form + Zod · Recharts · next-themes · Sonner
 
 ## Prerequisites
 
@@ -384,25 +384,120 @@ When a future session adds to this library:
 5. **Accessibility by default**: icon-only buttons go through `IconActionButton`, not a raw `<Button size="icon">`; anything attaching a DOM event handler needs its own `"use client"`; a spinner needs `motion-reduce:animate-none` (or reuse `Skeleton`, which already has it).
 6. **State**: props/callbacks only — no internal business state, no API call, no URL sync — until the session's brief explicitly asks for it.
 
+## Companies Module (Sprint 3) — Complete
+
+The first real business module — full CRUD (List/Create/Edit/Detail/Delete) against the live backend, `features/companies/` (mirrors `app/modules/companies/` on the backend). Built across five sessions (Sessions 1–4 plus a final QA/hardening pass); this section documents the module as it stands now, not session-by-session. **Status: production-ready for its stated scope** — see "Explicitly out of scope" below for what's deliberately not built.
+
+### Architecture
+
+```
+features/companies/
+  types/company.ts            # BackendCompany (snake_case, wire shape) + Company (camelCase, client shape)
+                               # + mapBackendCompany() + CompanyCreateRequest/CompanyUpdateRequest/CompanyListParams
+  services/company-service.ts # listCompanies / getCompany / createCompany / updateCompany / deleteCompany
+  hooks/                      # useCompanies, useCompany, useCreateCompany, useUpdateCompany, useDeleteCompany,
+                               # useCompanyFilters (URL state, see below)
+  schemas/
+    company-filters.ts        # CompanyFilters shape + toCompanyListParams() mapper
+    company-form-schema.ts    # zod schema, CompanyFormValues, form <-> Company/request payload mappers
+  constants/                  # company-status.ts, company-type.ts, query-keys.ts (companyKeys)
+  components/                 # company-columns.tsx, company-row-actions.tsx, company-form.tsx
+  pages/                      # company-list-page.tsx, company-detail-page.tsx, company-create-page.tsx, company-edit-page.tsx
+  index.ts                    # barrel — the module's public surface
+```
+
+`app/(authenticated)/companies/{page.tsx, new/page.tsx, [id]/page.tsx, [id]/edit/page.tsx}` are thin route wrappers that just render the matching page component — all real logic lives in `features/companies/`.
+
+**The BFF-proxy decision.** `ARCHITECTURE.md` describes the browser calling the backend "directly via TanStack Query," but the access token is an `HttpOnly` cookie the browser's JS can never read, and the backend runs on a different origin — so a client-side `apiClient` call literally cannot authenticate. `company-service.ts` therefore talks only to the Next.js BFF's own routes (`app/api/companies/**`, same pattern as `auth-service.ts`), which attach the caller's token server-side and forward to FastAPI. `lib/auth/authenticated-backend-request.ts`'s `authenticatedBackendRequest()` is the one place that does this (GET/POST/PUT/DELETE all reuse it, including the silent-refresh-on-401 retry `resolveSession()` already gives page loads) — every future module's BFF routes should reuse it rather than re-implementing token attachment.
+
+**Field-name convention.** `Company` (the type `useCompany`/`useCompanies` return) is camelCase, matching the rest of the client. `CompanyFormValues` (the Create/Edit form's RHF schema) is deliberately **snake_case**, matching `CompanyCreateRequest`/`CompanyUpdateRequest` exactly — this lets `mapServerErrorsToForm` map a 422's `field_errors` straight onto the right form field with zero translation layer, and the submitted values need no remapping to become the POST/PUT body.
+
+**Known deviation:** `CompanyCreateRequest.company_type` has no backend default (required), even though it wasn't in the brief's stated Create/Edit field list — omitting it would make every Create submission fail with a 422, so the form includes it as a required "Company Type" select, defaulting to Customer.
+
+### Permission Model
+
+Four permission codes gate the module: `company:view`, `company:create`, `company:edit`, `company:delete` — the same `resource:action` codes the backend's RBAC model already defines (`ARCHITECTURE.md` §9), read via `usePermissions()`. Every page and action checks its own permission independently rather than inheriting from a parent gate:
+
+- **List** (`company:view` implied by being able to reach the page — see `AuthGuard`) — `company:create` hides "New Company" (header action + genuinely-empty-state's CTA); `company:view`/`company:edit`/`company:delete` each independently hide their respective row action, and `company:view` additionally gates whether a row click navigates at all.
+- **Detail/Create/Edit pages** check their own required permission (`company:view`/`company:create`/`company:edit`) *before* rendering anything else, returning a plain `ErrorState` ("You don't have permission to …") instead of the page body — hooks are still called unconditionally above that check, per the Rules of Hooks.
+- **Delete** is gated the same way everywhere it appears (List row action, Detail page action).
+
+This is **cosmetic only** — every gated backend route re-validates the same permission server-side regardless of what the UI shows or hides (`ARCHITECTURE.md` §9.3's UI-layer note: "Cosmetic only. Never the security boundary"). Hiding a control here is a UX courtesy, not the enforcement point.
+
+### URL State
+
+Every list control — `search`, `status`, `city`, `page`, `pageSize`, `sort`, `direction` — lives in the URL via `useCompanyFilters()` (`features/companies/hooks/use-company-filters.ts`), built on **nuqs** (`useQueryStates`), per `07_FRONTEND_ARCHITECTURE.md`'s locked "URL/filter state → nuqs" decision. `nuqs` wasn't installed before this session (added here) and needs `<NuqsAdapter>` mounted once at the root (`providers/app-providers.tsx`).
+
+- `history: "push"` — every filter/sort/page change gets its own browser history entry, so Back/Forward actually step through the list's previous states rather than just leaving the page.
+- `shallow: true` (nuqs's default) — URL updates stay client-side, no Next.js server round trip; TanStack Query's `useCompanies` is what reacts to the new state and refetches.
+- A refresh, a pasted URL, or a shared link all restore the exact list state, since none of it lives in component state.
+- The backend's `sort` query param is a single combined string (`-created_at` = descending); the URL keeps `sort`/`direction` as two separate, readable params instead — `toCompanyListParams()` recombines them into the wire format only when calling the API.
+
+**Debounced fields, and the focus-loss trap.** `history: "push"` means a naive controlled `<input>` writing to the URL on every keystroke would push one history entry per character — Back would need to be pressed once per letter typed. `search` and `city` are therefore debounced *before* they reach `useCompanyFilters`: `SearchBar` already debounces internally (composes `useSearch`), and `CityFilterField` (a small local wrapper in `company-list-page.tsx`) does the same for the City filter. Both need to remount when the filter value changes from *outside* typing (Clear All, a removed filter chip, Back/Forward), since neither underlying input re-reads its initial value after mount otherwise — but naively keying them off the raw value (`key={filters.search}`) remounts the input on **every** debounced write too, including the component's own, which unmounts it mid-keystroke and drops focus. `src/hooks/use-external-value-key.ts`'s `useExternalValueKey()` is the fix: the input's own debounced handler calls `report(value)` right before writing out, so that resulting value change is recognized as self-inflicted and doesn't remount — only a value change *without* a matching `report()` call first (a genuine external change) bumps the key. `status` writes immediately, no debounce needed (one click = one deliberate action = one correct History stop).
+
+### Search
+
+`SearchBar` (Sprint 2) already provided debounce, a clear button, and a loading-spinner slot — this module wires the loading slot to `listQuery.isFetching` (spins during any in-flight fetch, not just the very first one) and, when a search yields zero rows, `DataTableNoResults` shows a description naming the actual search term (`No companies match "acme". Try a different search or clear your filters.`) rather than a generic message. `SearchBar` takes `flex-1` (plus a `min-w-56` floor) in the toolbar row so it's the dominant, widest control — not shrink-to-fit beside a wide empty gap.
+
+### Filters
+
+The Filters trigger is `AdvancedFilter` (Sprint 2) — a compact Popover button with an active-count badge, holding Status + City — **not** `FilterPanel`, which is an always-expanded collapsible *section* and visually far too heavy sitting beside a single search box in a toolbar row (this was tried first, then corrected after review: `FilterPanel` is the right choice for a dedicated filters sidebar/section, `AdvancedFilter` is the right one for a Toolbar trigger). `AppliedFilters` renders each active filter (search/status/city) as a removable chip below the toolbar plus one "Clear All" — the popover's own footer also gets a "Clear all" (`onReset`), scoped to when the popover is open, so there is exactly one Clear-All per visible context rather than two competing ones stacked on top of each other. Removing a single chip clears just that filter (and resets to page 1); Clear All resets every filter, sort, and page back to its default in one URL update (`setFilters(null)`).
+
+### Sorting
+
+Column headers use TanStack Table's own toggle, but the table's `sorting` state is fully controlled from `filters.sort`/`filters.direction` (there's no client-side "unsorted" concept — the backend always sorts by *something*, defaulting to `-created_at`). TanStack's default toggle is a 3-state cycle per column (ascending → descending → **unsorted**); the "unsorted" step is intercepted in `onSortingChange` and turned into a direction flip on the current column instead of being applied, because clearing the sort here would silently stop responding to further clicks — since the controlled `sorting` array would never change from that empty state again, every subsequent click recomputes the exact same "clear" transition. The "Created At" column also needs an explicit column `id: "created_at"` (distinct from its `accessorKey: "createdAt"`, which drives cell rendering) — without it, TanStack defaults the column's sort-`id` to the camelCase accessor key, and clicking the header would send `sort=createdAt` straight to a backend that only recognizes snake_case `created_at`/`updated_at`, 422ing every time.
+
+### CRUD Flow
+
+```
+List (search/filter/sort/paginate)
+  ├─ row action / row click "View" ──────────▶ Detail (read-only)
+  ├─ row action "Edit" ───────────────────────▶ Edit (CompanyForm, pre-filled)
+  ├─ row action "Delete" ─────────────────────▶ DeleteConfirmationDialog ──▶ useDeleteCompany()
+  └─ primary action "New Company" ────────────▶ Create (CompanyForm, empty)
+
+Detail
+  ├─ primary action "Edit" ───────────────────▶ Edit
+  └─ secondary action "Delete" ───────────────▶ DeleteConfirmationDialog ──▶ useDeleteCompany()
+```
+
+`CompanyForm` is the single shared form for both Create and Edit — same fields, same zod validation, same submit/error handling (422 → `mapServerErrorsToForm`, anything else → `toastError`). `useCreateCompany`/`useUpdateCompany`/`useDeleteCompany` each invalidate `companyKeys.lists()` on success so the List page's cache never goes stale after a mutation; `useUpdateCompany` also invalidates the specific `companyKeys.detail(id)`, and `useDeleteCompany` removes it outright. `useDeleteCompany` owns the *entire* delete outcome (invalidate, `toastSuccess`, navigate to `/companies`) so the Detail page's Delete button and the List page's row-action Delete get identical behavior — the List page's dialog just adds a per-call `onSuccess` to also close itself.
+
+**Stale-page correction.** Deleting the last row on the last page (or a filter narrowing the result set) can leave `filters.page` pointing past the new last page — the query would return an empty page even though earlier pages still have data, showing a misleading "no results." The List page watches `totalCount`/`filters.page` once a fetch completes and steps `page` back to the new last page if it's out of range.
+
+Every action is permission-gated — see "Permission Model" above.
+
+**Explicitly out of scope** (per the Sprint 3 brief): Activity Timeline, Audit History, Attachments/Documents, Change Log, Export/PDF. None of these are wired to the Companies module.
+
+### Final QA Pass (Sprint 3 Session 5)
+
+A dedicated review pass over the whole module — CRUD audit, responsive/dark-mode/accessibility/performance review, code cleanup — with a directive to fix only what was found, not add scope. Real issues found and fixed:
+
+- **Missing accessible label** — the Notes field (`CompanyForm`) rendered a bare `TextArea` with no `label`; the `FormSection` title above it is a heading, not a `<label for>` — a screen reader user tabbing into the field heard nothing identifying it. Fixed by passing `label="Notes"` through, matching every other field in the form.
+- **Stale page after delete**, **the sort-toggle 3-state trap**, **the debounced-input focus-loss bug**, and **the `FilterPanel`-vs-`AdvancedFilter` toolbar mismatch** — all documented inline above where they're now fixed, since they materially describe how the module behaves today, not just what changed.
+- **Verified clean, no changes needed:** no hardcoded colors/hex values anywhere in `features/companies/` (grepped); no dead code, unused exports, or duplicate constants/mappings; every icon-only affordance carries a visible label or `aria-label`; every spinner already carries `motion-reduce:animate-none`; responsive collapsing (table horizontal scroll, form grid to single-column, detail cards to single-column) all inherited correctly from the already-audited Sprint 2 component library since this module never overrides their breakpoint behavior.
+- **Not done:** no live browser/screen-reader session was run for this pass — findings above came from static code review (reading every file in `features/companies/` plus its call sites) and the two prior rounds of live user-reported bugs (sidebar collapse alignment [app-shell, not part of this module], search width, sort toggling, filter popover layout), not fresh empirical testing of every breakpoint/theme combination. Flagging this rather than claiming full manual QA coverage.
+
 ## Current Status
 
-**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and this finalization pass. Still no business modules or CRUD pages (Sprint 4+ per the master roadmap) — every template/toolbar/data-table/form/filter/chart/data-display component built so far is deliberately unconsumed by real data until then.
+**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and a finalization pass. **Sprint 3 (Sessions 1–5) — complete** — the Companies module: full CRUD (List/Create/Edit/Detail/Delete) against the live backend, URL-synced list state, UX polish, and a final QA/hardening pass — see "Companies Module" above. The first business module to prove out the rest of the reusable library (Data Table, Form Components, Filters, page templates) end-to-end against real data — the template every subsequent Masters module should follow.
 
 - Project scaffold, TypeScript strict mode, ESLint, Tailwind v4.
 - shadcn/ui configured (New York style, Slate base color, CSS variables).
 - Theme system (light/dark/system via next-themes), now switchable via the topbar `ThemeSwitcher`.
 - TanStack Query client + provider (dev-only devtools); retry only on network/server errors for reads, never for mutations.
-- Two HTTP clients: `src/lib/api-client.ts` (direct-to-backend, reserved for future business data) and `src/lib/bff-client.ts` (same-origin, used by auth) — both share one error-normalization pipeline (`src/lib/http-error.ts`, `src/lib/create-http-client.ts`).
+- Two HTTP clients: `src/lib/api-client.ts` (direct-to-backend; unused by Companies and every module that needs auth, for the reason documented above — kept for any future genuinely-public/unauthenticated backend call) and `src/lib/bff-client.ts` (same-origin — auth **and** all business data, e.g. Companies, go through this) — both share one error-normalization pipeline (`src/lib/http-error.ts`, `src/lib/create-http-client.ts`). Business-data BFF routes (`app/api/companies/**`) attach the caller's token server-side via `src/lib/auth/authenticated-backend-request.ts`.
 - Full authentication — see above.
 - Full application shell — Sidebar, Top Navigation, Breadcrumbs, permission-aware navigation — see above.
-- A mock-data Dashboard (`(authenticated)/dashboard`) proving the whole stack end-to-end: auth guard → shell → `SummaryGrid`/`MetricCard` KPIs → permission-filtered quick actions — not the real, backend-wired Dashboard (that's Sprint 3 in the master roadmap, once the backend's reporting endpoints exist).
+- A mock-data Dashboard (`(authenticated)/dashboard`) proving the whole stack end-to-end: auth guard → shell → `SummaryGrid`/`MetricCard` KPIs → permission-filtered quick actions — not yet the real, backend-wired Dashboard (still pending the backend's reporting endpoints).
 - Formatting utilities matching the backend's Decimal precision (currency: 2dp, quantity: 3dp, rate: 4dp).
 - Full global UX infrastructure — loading/skeletons, empty/error states, dialogs, toasts, shared page components, error-handling hooks — see above.
 - Full reusable page templates and navigation infrastructure — List/Detail/Form/Settings/Report templates, Toolbars, Filter Bar, data-display primitives — see above.
-- The Enterprise Data Table (`src/components/data-table/`) — see above. `@tanstack/react-table` added as a dependency in Session 1.
-- Enterprise Form Components (`src/components/form/`) — see above. `react-day-picker`, `cmdk` added as dependencies in Session 2.
+- The Enterprise Data Table (`src/components/data-table/`) — see above. `@tanstack/react-table` added as a dependency in Sprint 2 Session 1.
+- Enterprise Form Components (`src/components/form/`) — see above. `react-day-picker`, `cmdk` added as dependencies in Sprint 2 Session 2.
 - Filtering, Search & Pagination (`src/components/filters/`, `src/components/pagination/`, three new hooks) — see above.
 - Charts & Reporting Components (`src/components/charts/`, `src/components/reports/`, `src/components/dashboard/`) — see above. `recharts` already present as a dependency.
-- Session 5's component library finalization pass — consistency/accessibility/dark-mode/documentation audit across all of the above — see above.
+- Sprint 2 Session 5's component library finalization pass — consistency/accessibility/dark-mode/documentation audit across all of the above — see above.
+- The Companies module (`src/features/companies/`) — see "Companies Module" above. `nuqs` added as a dependency in Sprint 3 Session 4 for URL-synced list state.
 
-Next up: the first real business module (Companies, per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s Masters-first sequencing) — List/Create/Detail/Edit pages that finally instantiate the Data Table, Form Components, Filters, and page templates with real data instead of as unconsumed infra.
+Next up: the next Masters module per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencing (Fish, Boats, ...), following the same pattern the Companies module now establishes.

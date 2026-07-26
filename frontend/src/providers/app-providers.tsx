@@ -1,5 +1,6 @@
 "use client";
 
+import { NuqsAdapter } from "nuqs/adapters/next/app";
 import type { ReactNode } from "react";
 
 import { AuthProvider } from "@/features/auth/context/auth-context";
@@ -9,13 +10,15 @@ import { ToastProvider } from "@/providers/toast-provider";
 
 export function AppProviders({ children }: { children: ReactNode }) {
   return (
-    <ThemeProvider>
-      <QueryProvider>
-        <AuthProvider>
-          {children}
-          <ToastProvider />
-        </AuthProvider>
-      </QueryProvider>
-    </ThemeProvider>
+    <NuqsAdapter>
+      <ThemeProvider>
+        <QueryProvider>
+          <AuthProvider>
+            {children}
+            <ToastProvider />
+          </AuthProvider>
+        </QueryProvider>
+      </ThemeProvider>
+    </NuqsAdapter>
   );
 }
