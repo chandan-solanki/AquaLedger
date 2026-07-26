@@ -112,6 +112,21 @@
   --sidebar-ring: oklch(0.551 0.027 264.364);
 }
 
+/*
+ * Sonner (`providers/toast-provider.tsx`) defaults its close button to the
+ * toast's top-LEFT corner regardless of where the toast itself is anchored
+ * on screen - with `position="top-right"` that puts the close affordance on
+ * the opposite corner from the toast, which reads as misplaced rather than
+ * intentional. `!important` is used because Sonner injects its own CSS at
+ * runtime via JS (not a stylesheet Tailwind/PostCSS can order against), so a
+ * normal cascade-order override would be timing-dependent.
+ */
+[data-sonner-toaster] [data-close-button] {
+  left: auto !important;
+  right: 0 !important;
+  transform: translate(35%, -35%) !important;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

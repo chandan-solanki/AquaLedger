@@ -1,8 +1,9 @@
 "use client";
 
 import { NuqsAdapter } from "nuqs/adapters/next/app";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 
+import { RouteProgressBar } from "@/components/layout/route-progress-bar";
 import { AuthProvider } from "@/features/auth/context/auth-context";
 import { QueryProvider } from "@/providers/query-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -14,6 +15,12 @@ export function AppProviders({ children }: { children: ReactNode }) {
       <ThemeProvider>
         <QueryProvider>
           <AuthProvider>
+            {/* `useSearchParams` (inside RouteProgressBar) requires its own Suspense boundary here,
+                otherwise every route in the app - including statically-generated ones like
+                /login - would be forced into fully dynamic rendering. */}
+            <Suspense fallback={null}>
+              <RouteProgressBar />
+            </Suspense>
             {children}
             <ToastProvider />
           </AuthProvider>

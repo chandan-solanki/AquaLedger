@@ -478,9 +478,128 @@ A dedicated review pass over the whole module — CRUD audit, responsive/dark-mo
 - **Verified clean, no changes needed:** no hardcoded colors/hex values anywhere in `features/companies/` (grepped); no dead code, unused exports, or duplicate constants/mappings; every icon-only affordance carries a visible label or `aria-label`; every spinner already carries `motion-reduce:animate-none`; responsive collapsing (table horizontal scroll, form grid to single-column, detail cards to single-column) all inherited correctly from the already-audited Sprint 2 component library since this module never overrides their breakpoint behavior.
 - **Not done:** no live browser/screen-reader session was run for this pass — findings above came from static code review (reading every file in `features/companies/` plus its call sites) and the two prior rounds of live user-reported bugs (sidebar collapse alignment [app-shell, not part of this module], search width, sort toggling, filter popover layout), not fresh empirical testing of every breakpoint/theme combination. Flagging this rather than claiming full manual QA coverage.
 
+## Fish Module (Sprint 4) — Complete
+
+The second business module — full CRUD (List/Create/Edit/Detail/Delete) against the live backend, `features/fish/` (mirrors `app/modules/fish/` on the backend). Built by deliberately copying the Companies module's architecture session-for-session rather than redesigning anything, per this sprint's explicit brief; this section documents the module as it stands now. **Status: production-ready for its stated scope** — see "Explicitly out of scope" below.
+
+### Architecture
+
+```
+features/fish/
+  types/fish.ts              # BackendFish (snake_case, wire shape) + Fish (camelCase, client shape)
+                              # + mapBackendFish() + FishCreateRequest/FishUpdateRequest/FishListParams
+                              # + FISH_UNIT_LABELS/FISH_UNIT_OPTIONS (shared by the List page's filter and the Form's select)
+  services/fish-service.ts   # listFish / getFish / createFish / updateFish / deleteFish
+  hooks/                     # useFishes, useFish, useCreateFish, useUpdateFish, useDeleteFish,
+                              # useFishFilters (URL state, see below)
+  schemas/
+    fish-filters.ts          # FishFilters shape + toFishListParams() mapper
+    fish-form-schema.ts      # zod schema, FishFormValues, form <-> Fish/request payload mappers
+  constants/                 # fish-status.ts, query-keys.ts (fishKeys)
+  components/                # fish-columns.tsx, fish-row-actions.tsx, fish-form.tsx
+  pages/                     # fish-list-page.tsx, fish-detail-page.tsx, fish-create-page.tsx, fish-edit-page.tsx
+  index.ts                   # barrel — the module's public surface
+```
+
+`app/(authenticated)/fish/{page.tsx, new/page.tsx, [id]/page.tsx, [id]/edit/page.tsx}` are thin route wrappers, same as Companies. `app/api/fish/{route.ts, [id]/route.ts}` are the BFF proxy routes — GET/POST on the collection route, GET/PUT/DELETE on the `[id]` route, all built on the same `authenticatedBackendRequest()` Companies already established rather than re-implementing token attachment.
+
+**One real structural difference from Companies: the permission model.** The backend's fish permissions are a coarse `fish:view` / `fish:manage` split (`app/modules/fish/permissions.py`), not four separate `create`/`edit`/`delete` codes like Companies (`app/modules/companies/router.py`). This is a genuine, intentional backend design choice for master-data modules with no per-action business rules to distinguish — not an oversight to work around. Every Fish page/action gate below uses `fish:manage` everywhere Companies would use `company:create`/`company:edit`/`company:delete`.
+
+**`status` is a form/filter-only concept.** The backend has no `status` column on `fish` — only `is_active` (boolean). Rather than exposing a raw boolean toggle (worse UX, and inconsistent with every other status-bearing module), `fish-status.ts` defines a client-only `FishStatus = "active" | "inactive"` vocabulary with a `toFishStatus(isActive)` mapper, reused identically by the List page's Status filter, `FishForm`'s Status select, and the Detail/List page's status Badge. The conversion back to `is_active` happens at exactly two boundaries: `toFishListParams()` (filter → query param) and `toFishRequestPayload()` (form → request body) — nowhere else needs to know the boolean exists.
+
+### BFF Integration
+
+Same proxy pattern as Companies, no new mechanism: `features/fish/services/fish-service.ts` talks only to the Next.js BFF's own routes (`/api/fish/*`), never the FastAPI backend directly — the browser holds no bearer token to attach, since the access token lives in an `HttpOnly` cookie only the Next.js server can read (`ARCHITECTURE.md` §1.2/§8.1). `app/api/fish/route.ts` (GET list, POST create) and `app/api/fish/[id]/route.ts` (GET one, PUT update, DELETE) are thin handlers that each do nothing but call `authenticatedBackendRequest()` and forward the JSON response — the same function every other module's BFF routes already reuse, including its silent-refresh-on-401 retry. No Fish-specific auth code exists anywhere; a bug in token handling would be a shared-infrastructure fix, not a per-module one.
+
+### Permission Model
+
+Two permission codes gate the module: `fish:view`, `fish:manage` — read via `usePermissions()`, same as Companies:
+
+- **List** — `fish:manage` hides "New Fish" (header action + genuinely-empty-state's CTA) and the row-level Edit/Delete actions; `fish:view` gates the row-level View action and whether a row click navigates at all.
+- **Detail/Create/Edit pages** check their own required permission (`fish:view` for Detail, `fish:manage` for Create/Edit) *before* rendering anything else, returning a plain `ErrorState` instead of the page body — hooks are still called unconditionally above that check, per the Rules of Hooks.
+- **Delete** is gated on `fish:manage` everywhere it appears (List row action, Detail page action).
+
+Cosmetic only, same caveat as Companies — the backend re-validates every gated route regardless of what the UI hides.
+
+### URL State
+
+Every list control — `search`, `category`, `unit`, `status`, `page`, `pageSize`, `sort`, `direction` — lives in the URL via `useFishFilters()` (`features/fish/hooks/use-fish-filters.ts`), built on the same `nuqs` `useQueryStates()` pattern as `useCompanyFilters` — no new solution invented. `history: "push"` (Back/Forward step through prior list states), `shallow: true` (nuqs's default — no server round trip, `useFishes` reacts to the state change and refetches), and a refresh/pasted/shared URL all restore the exact list state. `sort`/`direction` are kept as two separate, readable URL params; `toFishListParams()` recombines them into the backend's single combined `-field` string only when calling the API.
+
+`search` and `category` are debounced *before* they reach `useFishFilters` — `SearchBar` debounces internally, and `CategoryFilterField` (a small local wrapper in `fish-list-page.tsx`, the direct analog of Companies' `CityFilterField`) does the same for the Category filter. Both use `useExternalValueKey()` to remount only on a genuinely external change (Clear All, a removed chip, Back/Forward) — never on their own debounced write, which would otherwise unmount the input mid-keystroke and drop focus. `status` and `unit` write immediately (one click = one deliberate action = one correct history stop).
+
+### Search
+
+`SearchBar` — debounced, clear button, `Escape` to clear-and-refocus, all inherited from the shared component with no Fish-specific code. The loading slot is wired to `listQuery.isFetching` (spins on every in-flight fetch, not just the first), and a zero-result search shows a description naming the actual term (`No fish match "pomfret". Try a different search or clear your filters.`).
+
+### Filters
+
+`AdvancedFilter` (Popover + active-count badge) holds Status, Unit, and Category — `StatusFilter` (a generic button-group, not string-specific) is reused for both Status and Unit rather than building a second filter component, since both are small closed vocabularies with the same "pick one, click again to clear" interaction. `AppliedFilters` renders each active filter as a removable chip with one "Clear All"; the popover's own footer "Clear all" is scoped to while it's open, so there's exactly one Clear-All per visible context. Being Popover-based rather than an always-expanded panel, the whole filter row collapses naturally on narrow viewports without any Fish-specific responsive code.
+
+### Sorting
+
+Same controlled pattern as Companies: `filters.sort`/`filters.direction` fully drive the table's `sorting` state, and TanStack's default 3-state toggle (asc → desc → **unsorted**) is intercepted in `onSortingChange` so the "unsorted" step flips direction on the current column instead of clearing it (this list has no unsorted concept — the backend always sorts by something). The "Created At" column carries an explicit `id: "created_at"` distinct from its `accessorKey: "createdAt"` for the same reason as Companies: without it, a header click would send `sort=createdAt` to a backend that only recognizes snake_case.
+
+### Table Polish
+
+Verified against the shared `DataTable`/`useDataTable` (Sprint 2) with no Fish-specific overrides: sticky header (the component's own default), `stickyActionColumn` (pins the kebab menu), server-side sorting/pagination (`manualSorting`/`manualPagination` default `true`), and all four Loading/Empty/No-Results/Error states rendered inside `<tbody>` so the header never disappears mid-fetch.
+
+### CRUD Flow
+
+```
+List (search/filter/sort/paginate)
+  ├─ row action / row click "View" ──────────▶ Detail (read-only)
+  ├─ row action "Edit" ───────────────────────▶ Edit (FishForm, pre-filled)
+  ├─ row action "Delete" ─────────────────────▶ DeleteConfirmationDialog ──▶ useDeleteFish()
+  └─ primary action "New Fish" ────────────────▶ Create (FishForm, empty)
+
+Detail
+  ├─ primary action "Edit" ───────────────────▶ Edit
+  └─ secondary action "Delete" ────────────────▶ DeleteConfirmationDialog ──▶ useDeleteFish()
+```
+
+`FishForm` is the single shared form for both Create and Edit — Fish Name, Fish Code, Local Name, Scientific Name, Category, Unit, Status, HSN Code, Default Purchase/Sale Rate, Description — same zod validation (mirroring the backend's own checks: HSN 4/6/8 digits, rate precision to 4 decimals) and the same submit/error handling (422 → `mapServerErrorsToForm`, anything else → `toastError`) as `CompanyForm`. `useCreateFish`/`useUpdateFish`/`useDeleteFish` invalidate `fishKeys.lists()` on success (`useUpdateFish` also invalidates `fishKeys.detail(id)`, `useDeleteFish` removes it outright); `useDeleteFish` owns the entire delete outcome (invalidate, `toastSuccess`, navigate to `/fish`) so the Detail page's Delete button and the List page's row-action Delete behave identically. The List page's own stale-page-after-delete correction (page rewinds if it points past the new last page once a fetch confirms it) is inherited verbatim from the Companies pattern.
+
+Every action is permission-gated — see "Permission Model" above.
+
+**Explicitly out of scope** (per the Sprint 4 brief): Activity Timeline, Audit History, Attachments, Export, PDF. None of these are wired to the Fish module.
+
+### Production Polish (Sprint 4 Session 4)
+
+A review pass over the whole module against the same checklist the Companies QA pass used (URL state, search/filter UX, table polish, responsive layout, accessibility, performance) — fix only what's found, no new CRUD scope. Since every piece was built by deliberately mirroring an already-hardened Companies implementation rather than a fresh one, most of the checklist was already satisfied; real gaps found and fixed:
+
+- **Unformatted rate values** — `FishDetailPage` displayed `fish.defaultPurchaseRate`/`defaultSaleRate` as raw wire strings (`"450.0000"`) instead of using the already-built `formatRate()` (`utils/format-number.ts`, NUMERIC(12,4) precision) the way every other rate/quantity/currency value in the app does. Fixed.
+- **Repeated derivation** — `toFishStatus(fish.isActive)` was computed three separate times across the Detail page (badge, twice in the description list). Hoisted to one `status` value computed once per render.
+- **Verified clean, no changes needed:** all 8 URL params (`search`/`category`/`unit`/`status`/`page`/`pageSize`/`sort`/`direction`) already synced correctly; no hardcoded colors/hex values in `features/fish/` (grepped); no dead code or unused exports; every form field already had a proper `label` (the exact bug class the Companies pass found in its Notes field doesn't recur here — checked field-by-field); every spinner already carries `motion-reduce:animate-none`; dialogs/dropdowns/comboboxes all inherit Radix's focus trap and keyboard support unchanged; responsive collapsing (table horizontal scroll, form grid to single column, detail cards to single column, filter popover collapse) all inherited correctly from the unmodified Sprint 2 component library.
+- **Barrel export gap** — `features/fish/index.ts` had not been updated in Sessions 2–3 to export `FishForm`, the Create/Edit/Detail pages, the mutation hooks, or the form schema — only Session 1's list-page surface was ever re-exported. Brought fully up to date to match `features/companies/index.ts`'s completeness.
+- **Not done:** no live browser/screen-reader session was run for this pass, same caveat as the Companies QA pass — findings came from static code review of every file in `features/fish/` plus its call sites, not fresh empirical testing of every breakpoint/theme combination.
+
+### Final QA Pass (Sprint 4 Session 5)
+
+The closing hardening pass, mirroring the Companies module's own Sprint 3 Session 5 process exactly — a full CRUD/permissions/responsive/dark-mode/accessibility/performance/cleanup review with a directive to fix only what's found, not add scope, and to mark the module complete once satisfied.
+
+- **CRUD audit** — re-verified List, View, Create, Edit, Delete, permissions, search, filters, sorting, pagination, URL state, and all four Loading/Error/Empty/No-Results states, this time including the Create/Edit pages specifically (Session 4's pass focused mainly on List/Detail). All correct; no code changes required beyond the one comment fix below.
+- **Stale comment** — `fish-form-schema.ts`'s doc comment on the `status` field still read "this session keeps the same Status select UX... (reusing FISH_STATUS_OPTIONS from Session 1)", a session-relative reference that had gone stale across three subsequent sessions. Reworded to state the fact plainly instead of anchoring it to when it was written.
+- **Dark mode** — re-confirmed via grep across all of `features/fish/`: zero hardcoded colors (`text-gray-*`, `bg-white`, hex/`rgb()`/`hsl()` literals), every visual treatment (Badge variants, borders, muted text) comes from the same semantic Tailwind tokens the rest of the app themes off. Nothing in the module can render inconsistently between light/dark because nothing in it makes its own color decision.
+- **Responsive** — re-checked Desktop/Laptop/Tablet/Mobile breakpoints across List (table horizontal scroll + toolbar wrap), Detail (two-column info cards collapsing to one), and Form (`FormGrid` two-column collapsing to one) — all inherited unmodified from the Sprint 2 component library, since the Fish module never overrides a breakpoint or grid-column value itself.
+- **Accessibility** — re-verified keyboard navigation, focus order (natural DOM order everywhere, no manual `tabIndex`), `aria-invalid`/`aria-describedby` wiring on every form field (including the Combobox-based Unit/Status selects, which get both from `FormField`'s render props same as a plain `Input`), dialog focus trap (inherited from Radix `AlertDialog`), and reduced motion (`motion-reduce:animate-none` present on every spinner). No gaps found.
+- **Performance** — re-checked React Query usage (`keepPreviousData` on the list query, `enabled: Boolean(id)` gating the detail query, correct `fishKeys.lists()`/`fishKeys.detail(id)` invalidation on every mutation), memoization (columns/row-actions/sorting all stable via `useMemo`/`useCallback`), and found no further duplicate renders or duplicate helpers beyond what Session 4 already fixed.
+- **Code cleanup** — no unused imports, no dead code, no duplicate constants/mappings found (grepped and manually traced every export in the module's barrel back to a real call site). One stale comment fixed (above); nothing else warranted a change.
+
+**Fish module marked complete** — full CRUD against the live backend, URL-synced list state, and two rounds of hardening (production polish + final QA), matching the Companies module's own bar for "production-ready for its stated scope."
+
+### Extension Guidelines (for the next Masters module)
+
+Fish proved the Companies pattern replicates cleanly to a second module. Building the next one (Boats, per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencing) should follow the same shape:
+
+1. **Copy the folder structure verbatim** — `types/`, `services/`, `hooks/`, `schemas/`, `constants/`, `components/`, `pages/`, `index.ts` — and rename, don't restructure.
+2. **Check the backend's actual permission codes before assuming Companies' four-code shape.** Fish's `view`/`manage` split vs. Companies' `view`/`create`/`edit`/`delete` was a real, deliberate backend difference (`ARCHITECTURE.md` §9.2) — read the module's `permissions.py` and router `Depends(require_permission(...))` calls first, and gate the UI on whatever actually exists rather than copying Companies' code names by rote.
+3. **Watch for fields with no direct backend equivalent** — Fish's `status` (client-only, derived from `is_active`) is the pattern for any other module where the natural UI concept doesn't map 1:1 onto a backend column: define the client vocabulary in `constants/`, convert at exactly the two boundaries (list-params mapper, form-payload mapper), and never let the raw backend shape leak into the URL/form field name unless it already matches.
+4. **Reuse `authenticatedBackendRequest()` for every BFF route** without exception — no module should re-implement token attachment.
+5. **Run the two-pass QA rhythm** — a production-polish pass (URL state, search/filter UX, table polish, accessibility, performance — fix what's found) followed by a final QA pass before calling a module done (CRUD re-audit, dark mode, responsive, cleanup, documentation) — rather than treating either as optional.
+
 ## Current Status
 
-**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and a finalization pass. **Sprint 3 (Sessions 1–5) — complete** — the Companies module: full CRUD (List/Create/Edit/Detail/Delete) against the live backend, URL-synced list state, UX polish, and a final QA/hardening pass — see "Companies Module" above. The first business module to prove out the rest of the reusable library (Data Table, Form Components, Filters, page templates) end-to-end against real data — the template every subsequent Masters module should follow.
+**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and a finalization pass. **Sprint 3 (Sessions 1–5) — complete** — the Companies module: full CRUD (List/Create/Edit/Detail/Delete) against the live backend, URL-synced list state, UX polish, and a final QA/hardening pass — see "Companies Module" above. **Sprint 4 (Sessions 1–5) — complete** — the Fish module: full CRUD built by deliberately mirroring the Companies architecture, URL-synced list state, a production-polish pass, and a final QA/hardening pass — see "Fish Module" above. The Companies module proved the reusable library out end-to-end; Fish proves the *pattern itself* replicates cleanly to a second module with a different (coarser) permission model and no dedicated "status" column.
 
 - Project scaffold, TypeScript strict mode, ESLint, Tailwind v4.
 - shadcn/ui configured (New York style, Slate base color, CSS variables).
@@ -499,5 +618,6 @@ A dedicated review pass over the whole module — CRUD audit, responsive/dark-mo
 - Charts & Reporting Components (`src/components/charts/`, `src/components/reports/`, `src/components/dashboard/`) — see above. `recharts` already present as a dependency.
 - Sprint 2 Session 5's component library finalization pass — consistency/accessibility/dark-mode/documentation audit across all of the above — see above.
 - The Companies module (`src/features/companies/`) — see "Companies Module" above. `nuqs` added as a dependency in Sprint 3 Session 4 for URL-synced list state.
+- The Fish module (`src/features/fish/`) — see "Fish Module" above. No new dependencies; proves the Companies pattern replicates to a module with a coarser (`view`/`manage`) permission model and no dedicated `status` column.
 
-Next up: the next Masters module per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencing (Fish, Boats, ...), following the same pattern the Companies module now establishes.
+Next up: the next Masters module per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencing (Boats, Trips, ...), following the same pattern the Companies and Fish modules now establish.
