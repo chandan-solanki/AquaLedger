@@ -4,7 +4,7 @@ The Next.js 15 frontend for AquaLedger — an ERP for the seafood trading indust
 
 ## Stack
 
-Next.js 15 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS v4 · shadcn/ui (New York, Slate) · TanStack Query · Axios · React Hook Form + Zod · Recharts · next-themes · Sonner
+Next.js 15 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS v4 · shadcn/ui (New York, Slate) · TanStack Query · TanStack Table v8 · Axios · React Hook Form + Zod · Recharts · next-themes · Sonner
 
 ## Prerequisites
 
@@ -48,10 +48,18 @@ Follows `07_FRONTEND_ARCHITECTURE.md` §3 — feature-first, with a small set of
 src/
   app/              # Next.js App Router — routes, layouts
   components/
-    ui/               # shadcn/ui primitives (Button, Card, Input, Label, Sidebar, ...)
+    ui/               # shadcn/ui primitives (Button, Card, Input, Label, Sidebar, Popover, Command, Calendar, Switch, ...)
     layout/           # App Layout, Sidebar, Top Navigation, Breadcrumbs, Page Header — see "Application Shell" below
-    data-display/     # Status Badge, KPI Card, Money Display, ... (not yet built)
-    feedback/         # Toast, Alert, Empty/Error/Loading states (not yet built)
+    data-display/     # MetricCard, TrendMetricCard, SummaryGrid, InfoCard, KeyValueList, DescriptionList
+    feedback/         # Empty/Error/Offline states, Skeletons, Dialogs
+    templates/        # List/Detail/Form/Settings/Report page templates — see "Page Templates" above
+    data-table/       # Enterprise Data Table (Sprint 2, Session 1) — see below
+    form/             # Enterprise Form Components (Sprint 2, Session 2) — see below
+    filters/          # Filtering & Search System (Sprint 2, Session 3) — see below
+    pagination/       # Pagination primitives (Sprint 2, Session 3) — see below
+    charts/           # Charts + KPI/Trend cards (Sprint 2, Session 4) — see below
+    reports/          # Report page building blocks (Sprint 2, Session 4) — see below
+    dashboard/        # Dashboard grid + widgets (Sprint 2, Session 4) — see below
   features/
     auth/             # Login, session, permissions — see "Authentication" below
     # companies, invoices, trips, ... — empty until Sprint 4+
@@ -172,9 +180,213 @@ The reusable scaffolding every CRUD module (Sprint 4+) builds its actual pages f
 
 **Known gap, unchanged from Session 4:** `globals.css` still has no `--success`/`--warning`/`--info` tokens. `TrendMetricCard` and every other component built this session stick to the existing Primary/Secondary/Destructive/Muted set for the same reason documented in Session 4 — inventing an undeclared Tailwind v4 `@theme` token would silently fail rather than error.
 
+## Enterprise Data Table (Sprint 2, Session 1)
+
+The single, standardized table implementation for every future List page and Related Records sub-table (`06_COMPONENT_LIBRARY.md` §6, `07_FRONTEND_ARCHITECTURE.md` §13) — reusable infrastructure only, built and verified against mock data. No business module (Companies/Fish/Boats/...), no CRUD page, and no real API call is wired to it this session; that starts at Sprint 4.
+
+### Architecture
+
+`src/components/data-table/` is built directly on **TanStack Table v8** (`@tanstack/react-table`, added this session) rather than a hand-rolled table, matching the "reuse an established primitive over inventing one" principle already applied to the Sidebar (Session 3). The split mirrors how the rest of the app separates server state from rendering:
+
+- **`DataTable`** is a pure renderer over a `Table<TData>` instance — it never builds its own table and never calls an API. Sorting/pagination/filtering are **server-side by default** (`manualSorting`/`manualPagination`/`manualFiltering` all default to `true` in `useDataTable`): the table reports the sort/page the user wants via callbacks, and the owning feature's TanStack Query hook does the actual re-fetch, per `07_FRONTEND_ARCHITECTURE.md` §8's shared pagination contract.
+- **`useDataTable`** is the hook a feature calls to build that `Table` instance from `columns` + `data` (+ whichever state slices it wants to control). Every controlled slice — sorting, column visibility, row selection, column pinning, column sizing — is genuinely optional: pass the state and its `onChange` to control a slice from outside (e.g. syncing sort to the URL, per `07_FRONTEND_ARCHITECTURE.md` §7's URL-State rule), or omit both and TanStack manages it internally. Getting this half-controlled behavior right matters: TanStack merges options as `{...defaults, ...options}`, so passing an explicit `sorting: undefined` (instead of omitting the key) would silently overwrite its internal state manager — `useDataTable` conditionally spreads every controlled key/callback for exactly this reason.
+- **The table instance is lifted to the caller**, not hidden inside `DataTable`. This is what lets a `DataTableToolbar`'s `DataTableColumnToggle` (which needs `table.getAllColumns()`) and the `DataTable` body share one instance instead of the toolbar reaching for a table `DataTable` built for itself. A feature page's shape is: build `table` via `useDataTable` → pass it to `DataTable` → pass it to any toolbar piece that needs it.
+- **Column widths are always explicit** (`column.getSize()`, defaulting to TanStack's own 150px), never left to the browser's natural `table-layout: auto`. Sticky/pinned columns compute their `left`/`right` offset from the *declared* sizes (`column.getStart()`/`getAfter()`); if the actually-rendered width ever drifted from the declared one, pinned columns would visually misalign. Give a column an explicit `size` when it needs to look tighter/wider than the default.
+- **Sticky/pinned columns use one real mechanism**: TanStack's own `columnPinning` state (`{ left: string[], right: string[] }`), which is what genuinely "Pinned columns" means. `stickyFirstColumn`/`stickyActionColumn` are a convenience layer on top for the common single-column case (per `02_DESIGN_SYSTEM.md` §15's "identifying first column" rule) — they don't require the caller to manage pinning state at all. For anything beyond one pinned column per side, use `columnPinning` directly; both mechanisms compose (a `th`/`td` can be sticky via either path, and the sticky header + a pinned first column correctly form a "frozen corner" via CSS `position: sticky` with both `top` and `left` set).
+- **Loading/Error/Empty/No-Results all render inside `<tbody>`** as a single full-width (`colSpan`) cell, not by replacing the whole table — so the header (and any sticky columns) stay visible and in place while a fetch resolves, per `06_COMPONENT_LIBRARY.md` §6's category default.
+
+### Composition
+
+```
+DataTable
+  toolbar   → DataTableToolbar (search / filters / viewOptions / export / refresh slots, or a Bulk Actions bar once selectedCount > 0)
+  <table>
+    <thead> → DataTableColumnHeader (per sortable column) + resize handle
+    <tbody> → DataTableLoading | DataTableError | DataTableEmpty | DataTableNoResults | real rows (DataTableRowActions in the actions column)
+  pagination → DataTablePagination
+```
+
+`column-helpers.tsx` factors out the two column shapes almost every table needs so no feature hand-rolls them: `createSelectionColumn()` (the select-all/indeterminate/per-row checkbox column, per the "avoid when no bulk action exists" rule — only added when a table actually needs it) and `createRowActionsColumn(actions)` (the kebab menu column, `actions` as a function of the row so RBAC filtering — `07_FRONTEND_ARCHITECTURE.md` §11 — happens where the feature already has the current permission set in scope).
+
+### Usage
+
+```tsx
+"use client";
+
+import {
+  DataTable, DataTableToolbar, DataTableColumnHeader, DataTableColumnToggle,
+  DataTablePagination, createSelectionColumn, createRowActionsColumn,
+  useDataTable, useColumnVisibility, useRowSelection,
+  type DataTableColumn,
+} from "@/components/data-table";
+
+const columns: DataTableColumn<Company>[] = [
+  createSelectionColumn<Company>(),
+  {
+    accessorKey: "name",
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Company" />,
+  },
+  {
+    accessorKey: "balance",
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Balance" />,
+    cell: ({ getValue }) => <MoneyDisplay value={getValue<number>()} />,
+    meta: { align: "right" },
+  },
+  createRowActionsColumn<Company>((row) => [
+    { label: "Edit", icon: Pencil, onClick: () => router.push(`/companies/${row.id}/edit`) },
+    { label: "Deactivate", icon: Ban, variant: "destructive", separatorBefore: true, onClick: () => deactivate(row.id) },
+  ]),
+];
+
+function CompaniesTable() {
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 25 });
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("companies-columns");
+  const { rowSelection, setRowSelection, selectedCount, clearSelection } = useRowSelection();
+
+  const query = useCompaniesQuery({ sorting, pagination }); // feature's own TanStack Query hook (Sprint 4+)
+
+  const table = useDataTable({
+    data: query.data?.items ?? [],
+    columns,
+    sorting, onSortingChange: setSorting,
+    columnVisibility, onColumnVisibilityChange: setColumnVisibility,
+    rowSelection, onRowSelectionChange: setRowSelection,
+    enableRowSelection: true,
+    pageCount: query.data?.pageCount,
+  });
+
+  return (
+    <DataTable
+      table={table}
+      stickyFirstColumn
+      stickyActionColumn
+      onRowClick={(row) => router.push(`/companies/${row.id}`)}
+      isLoading={query.isLoading}
+      error={query.isError ? { title: "Couldn't load companies", onRetry: query.refetch } : null}
+      isEmpty={query.data?.items.length === 0 && !hasActiveFilters}
+      isNoResults={query.data?.items.length === 0 && hasActiveFilters}
+      toolbar={
+        <DataTableToolbar
+          search={<SearchInput ... />}
+          viewOptions={<DataTableColumnToggle table={table} />}
+          selectedCount={selectedCount}
+          bulkActions={<Button variant="destructive" onClick={() => bulkDeactivate(rowSelection)}>Deactivate</Button>}
+        />
+      }
+      pagination={
+        <DataTablePagination
+          pageIndex={pagination.pageIndex}
+          pageSize={pagination.pageSize}
+          totalCount={query.data?.totalCount ?? 0}
+          onPageChange={(pageIndex) => setPagination((p) => ({ ...p, pageIndex }))}
+          onPageSizeChange={(pageSize) => setPagination({ pageIndex: 0, pageSize })}
+          selectedCount={selectedCount}
+        />
+      }
+    />
+  );
+}
+```
+
+### Future integration with CRUD modules (Sprint 4+)
+
+A feature module only ever supplies **columns** and a **data source** — never a bespoke table:
+
+1. Define the column array in `features/{module}/components/` (or colocated with the List page), composing `DataTableColumnHeader`, `createSelectionColumn`/`createRowActionsColumn`, and Status Badge/Money Display cell renderers.
+2. Wire `sorting`/`pagination`/search-and-filter state to the URL (`07_FRONTEND_ARCHITECTURE.md` §7) and pass it into the feature's own TanStack Query list hook.
+3. Build the `table` via `useDataTable`, render `DataTable` + `DataTableToolbar` + `DataTablePagination` as shown above.
+4. `enableRowSelection`/`createSelectionColumn` are opt-in per module — only add them where a real Bulk Action exists (`06_COMPONENT_LIBRARY.md` §6), not for consistency's sake.
+
+None of this session's components hardcode a module name, an entity shape, or an endpoint — that's the point of building it once, ahead of Sprint 4.
+
+### Verified this session
+
+Rendering, server-side sorting/pagination (via a mock in-memory "server"), multi-select with header indeterminate state, the row-actions kebab, `localStorage`-persisted column visibility (confirmed surviving a real page reload), sticky header + sticky first/last column together, the Loading/Error/Empty/No-Results states (header stays visible throughout), and both themes — checked live against a running dev server with a temporary harness page (removed before this session's work was considered done, per the "no CRUD pages this session" scope).
+
+**Fixed along the way:** the shared `Checkbox` primitive (`src/components/ui/checkbox.tsx`, Session 1) only styled Radix's `checked` state, never `indeterminate` — a table with some-but-not-all rows selected rendered its header checkbox looking identically empty/unchecked. Added the `indeterminate` style variant and a distinct `Minus` icon so "some selected" is visually distinguishable from "none selected," fixed once at the shared component per `07_FRONTEND_ARCHITECTURE.md` §28.
+
+## Form Components (Sprint 2, Session 2)
+
+`src/components/form/` — every field a business form (Sprint 4+) will need, built once against `react-hook-form` + `zod` rather than per-module. Reusable infrastructure only: no business form, no API call, wired this session.
+
+- **`FormField`** — the shared label/description/error/required wrapper every other field composes, via a render-prop (`children: (props: { id, describedBy, "aria-invalid" }) => ReactNode`) so each field wires its own input to the right `id`/`aria-describedby`/`aria-invalid` without duplicating that logic.
+- **Numeric family** — `NumberInput` is the base (prefix/suffix affixes, `sanitizeNumericString()` exported standalone); `CurrencyInput`/`QuantityInput`/`RateInput`/`PercentageInput` are fixed-precision *configurations* of it (2/3/4/2 decimal places, matching the backend's `NUMERIC(14,2)`/`NUMERIC(12,3)`/`NUMERIC(12,4)` columns) — not separate implementations, the same "configure, don't reimplement" pattern as Status Badge.
+- **Date family** — `DatePicker` (typed entry *and* a Calendar popover — parses/validates via `date-fns`) and `DateRangePicker` (two-ended, Clear in the popover footer). Both default to `DEFAULT_DATE_FORMAT` (`src/lib/date-format.ts`) rather than each hardcoding its own format string.
+- **Selection family** — `Combobox` (generic, `ComboboxOption<TValue>`) underlies `SearchableSelect` (client-side filter) and `AsyncSelect` (server-side search — requires `onSearchChange`/`isLoading`, `shouldFilter={false}` so Command doesn't double-filter already-filtered results).
+- **Text family** — `EmailInput`, `PhoneInput` (country-code prefix), `GSTINInput` (auto-uppercase, monospace), `TextArea`.
+- **Layout** — `FormGrid` (responsive 1/2/3/4-column field grid, collapsing below the laptop breakpoint), `FormSection` (composes the shared `SectionHeader`), `FormActions` (primary/secondary/danger button slots).
+
+```tsx
+<FormGrid columns={2}>
+  <CurrencyInput label="Invoice Amount" required value={amount} onChange={setAmount} />
+  <DatePicker label="Due Date" required value={dueDate} onChange={setDueDate} />
+  <SearchableSelect label="Company" options={companyOptions} value={companyId} onChange={setCompanyId} />
+</FormGrid>
+```
+
+## Filtering, Search & Pagination (Sprint 2, Session 3)
+
+`src/components/filters/`, `src/components/pagination/`, and three hooks in `src/hooks/` — every List/Report page's filter row and pagination bar, entirely props-driven: no internal business state, no API call, no URL sync (a future module wires that itself, per `07_FRONTEND_ARCHITECTURE.md` §7's URL-State rule).
+
+- **Containers** — `FilterPanel` (Radix `Collapsible`, genuinely generic about its `children`), `AdvancedFilter` (Popover-based, `FilterBadge` on the trigger), `FilterSection`/`FilterGroup` (the latter a semantic `<fieldset>/<legend>`).
+- **Fields** — `StatusFilter` (single or `multiple`), `DateRangeFilter` (thin wrapper over `form`'s `DateRangePicker`), `NumberRangeFilter` (wraps `form`'s `NumberInput` for both bounds), `MultiSelectFilter` (Popover+Command, `FilterChip` tags for selections), `BooleanFilter` (`Switch`, not `Checkbox` — a filter takes effect immediately), `TextFilter`.
+- **Applied-state chrome** — `FilterChip`, `FilterBadge`, `AppliedFilters`, `ClearFiltersButton`, `FilterDivider`.
+- **`SearchBar`** — the Toolbar's free-text field; composes the `useSearch` hook for its debounce timer rather than reimplementing it, both controlled and uncontrolled.
+- **Pagination** (`src/components/pagination/`) — `Pagination` (First/Prev/[pages]/Next/Last, `getPaginationRange()` exported standalone for a consumer that wants the raw token sequence), `PageSizeSelector`, `PageJump`, `PaginationSummary` ("Showing X–Y of Z"). 1-based `page`, deliberately — the Data Table's own internal TanStack integration stays 0-based (TanStack's convention); a future session could rebuild `DataTablePagination` on top of these instead of its own inline markup.
+- **Hooks** (`src/hooks/`) — `useSearch` (debounced value), `usePagination` (page/pageSize/from/to/next/previous, resets to page 1 on page-size change), `useFilters<TFilters>` (named-filter state, `activeCount`/`isActive` diffed against the hook's own initial values — `TFilters extends object`, not `Record<string, unknown>`, so a plain named interface without an index signature is accepted).
+
+```tsx
+const { filters, setFilter, clearFilters, activeCount } = useFilters({ status: "all", search: "" });
+const pagination = usePagination({ totalCount: data?.total ?? 0 });
+
+<FilterPanel actions={<ClearFiltersButton onClear={clearFilters} count={activeCount} />}>
+  <StatusFilter value={filters.status} onChange={(v) => setFilter("status", v)} options={statusOptions} />
+</FilterPanel>
+<Pagination page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
+```
+
+## Charts & Reporting Components (Sprint 2, Session 4)
+
+`src/components/charts/`, `src/components/reports/`, `src/components/dashboard/` — Recharts-based charts and the surrounding Dashboard/Report page chrome. No business report, no dashboard API, no business calculation — every value arrives already computed/formatted.
+
+- **Charts** (`src/components/charts/`) — `LineChart`, `BarChart` (grouped or `stacked`), `AreaChart` (gradient fill, gradient `id`s scoped per instance via `useId()` to avoid collisions between two charts on one page), `PieChart`, `DonutChart` (a `PieChart` with `innerRadius` pre-set — not a separate implementation). All `ResponsiveContainer`-wrapped, themed entirely off `--chart-1`…`--chart-5`/`--border`/`--muted-foreground` CSS custom properties (`globals.css`) rather than JS theme detection, so they repaint correctly across the dark-mode class toggle for free; Recharts v3's `accessibilityLayer` (keyboard nav + ARIA over the plotted data) is on by default. Each chart independently supports `isLoading`/`error`/empty-data (via the shared `ChartLoading`/`ChartError`/`ChartEmpty`, so it works standalone without `ChartCard`), plus a shared `ChartTooltip`/`Legend` passed to Recharts' own `content` prop.
+- **`KpiCard`** / **`TrendCard`** — the chart-context Stat Card / trend indicator. Deliberately shares its shell with `data-display`'s pre-existing `MetricCard`/`TrendMetricCard` (this session's spec placed it in its own folder) — see Session 5's finalization notes below for the consolidation this sets up. `TrendCard`'s `positive`/`neutral` states stay plain foreground (no invented "success" green, matching the Known Gap noted throughout this doc); only `negative` borrows the existing `destructive` token.
+- **`ChartCard`** — the reusable title/description/actions/loading/error wrapper any chart or widget renders inside.
+- **Reports** (`src/components/reports/`) — `ReportHeader` (composes `PageTitle` + a "Generated at" caption), `ReportFilters` (a `FilterPanel` configuration), `ReportSummary` (`SummaryGrid` + `KpiCard`), `ReportSection` (composes `SectionHeader`), `ExportMenu` (CSV/Excel/PDF — UI only, `onExport(format)` callback, no file generation), `PrintButton` (`window.print()` by default), `DateRangeHeader` (read-only "covering {range}" caption).
+- **Dashboard** (`src/components/dashboard/`) — `DashboardGrid` (12-column responsive), `MetricGrid` (a direct alias of `data-display`'s `SummaryGrid`), `RecentActivityCard`, `QuickActionsCard` (`next/link` for `href` actions, a plain callback otherwise), `SummarySection` (composes `SectionHeader` — the Dashboard-context sibling of `ReportSection`).
+
+```tsx
+<ReportSummary items={[{ key: "revenue", title: "Total Revenue", value: formatCurrency(total), icon: DollarSign }]} />
+<ChartCard title="Revenue vs Expenses" isLoading={query.isLoading} error={query.error?.message}>
+  <LineChart data={query.data ?? []} series={[{ dataKey: "revenue" }, { dataKey: "expenses" }]} xAxisKey="month" />
+</ChartCard>
+```
+
+## Component Library Finalization (Sprint 2, Session 5)
+
+A quality/consistency pass over every folder built in Sessions 1–4 — no new components, per this session's explicit scope. Findings and fixes:
+
+- **Duplicated helper removed** — `DEFAULT_FORMAT = "dd/MM/yyyy"` was independently declared in `DatePicker`, `DateRangePicker`, and `DateRangeHeader`. Consolidated into `src/lib/date-format.ts`'s `DEFAULT_DATE_FORMAT`/`DEFAULT_DATETIME_FORMAT`, imported by all three plus `ReportHeader`.
+- **Prop-consistency gaps closed** — `DataTableEmpty`/`DataTableError`/`DataTableNoResults` (Session 1) gained the `className` prop already present on their Session 4 chart equivalents (`ChartEmpty`/`ChartError`); `ExportMenu`/`PrintButton` (Session 4) gained `className`, matching every other action button in the library (`ClearFiltersButton`, `ToolbarButton`, ...).
+- **Client-boundary fix** — `DataTableNoResults`, `ClearFiltersButton`, and `FilterChip` attach `onClick` handlers directly but were missing their own `"use client"` directive; they happened to always render under an already-client ancestor in every context exercised so far (masking the gap), but a component that attaches a DOM event handler should carry the directive itself rather than depend on an inherited boundary. Fixed; every other interactive leaf in the library already did this correctly.
+- **Verified clean, no changes needed**: no hardcoded colors/hex values anywhere in the four new folders (every color is a semantic token, confirmed by grep); no duplicate barrel exports; Recharts' `accessibilityLayer` and the shared `Skeleton`'s `motion-reduce:animate-none` mean the charts/loading-states' accessibility and reduced-motion behavior came "for free" from the reuse-over-duplication approach followed all session; every icon-only button in the four new folders goes through `IconActionButton` (which requires a `label`) or carries an explicit `aria-label`; `Pagination`'s page buttons carry `aria-current="page"`.
+- **Known, deliberately unresolved overlaps** (flagged for a future session, not fixed here since fixing either means redesigning pre-Sprint-2 code, out of this session's scope): `components/charts/KpiCard`+`TrendCard` duplicate the shell of `components/data-display/MetricCard`+`TrendMetricCard` by construction — this session's spec required the former in a new folder. `components/layout/FilterBar`/`TableToolbar`/`templates/list-page-template.tsx` (pre-Sprint-2) still describe their own Date Range/Status/Column-Selector/Export controls as "coming soon" placeholders — the real ones now exist in `filters/`/`charts/data-table`, but no current page imports these placeholder files, so nothing breaks either way; swapping them is Sprint 3+ integration work, not a Sprint 2 library concern.
+
+### Extension guidelines
+
+When a future session adds to this library:
+
+1. **Reuse before building** — check `data-display/`, `form/`, `filters/`, `charts/` first; a new "Xyz Filter"/"Xyz Card" is very often a thin, pre-configured wrapper over an existing primitive (see `DonutChart` over `PieChart`, `CurrencyInput` over `NumberInput`, `MetricGrid` over `SummaryGrid`) rather than a new implementation.
+2. **One folder per concern**, flat inside it (no nested subfolders beyond an occasional `hooks/`), each with a barrel `index.ts` re-exporting every public component *and* its prop type.
+3. **Prop naming**: `isLoading` (not `loading`), `className` on every component (even a thin wrapper — forward it, don't drop it), `onXChange` for callbacks, `"aria-label"` as a literal-keyed prop only when it needs a caller-facing override.
+4. **Theming**: only the existing `--chart-*`/semantic Tailwind tokens (`bg-muted`, `text-destructive`, ...) — never a hardcoded hex/named color, and never invent a new `--token` outside a dedicated design-system session (see the Known Gap notes on the missing `--success`/`--warning`/`--info` tokens above).
+5. **Accessibility by default**: icon-only buttons go through `IconActionButton`, not a raw `<Button size="icon">`; anything attaching a DOM event handler needs its own `"use client"`; a spinner needs `motion-reduce:animate-none` (or reuse `Skeleton`, which already has it).
+6. **State**: props/callbacks only — no internal business state, no API call, no URL sync — until the session's brief explicitly asks for it.
+
 ## Current Status
 
-**Sprint 1, Sessions 1–5** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. Still no business modules or CRUD pages (Sprint 4+ per the master roadmap) — every template/toolbar/data-display component built this session is deliberately unconsumed by real data until then.
+**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and this finalization pass. Still no business modules or CRUD pages (Sprint 4+ per the master roadmap) — every template/toolbar/data-table/form/filter/chart/data-display component built so far is deliberately unconsumed by real data until then.
 
 - Project scaffold, TypeScript strict mode, ESLint, Tailwind v4.
 - shadcn/ui configured (New York style, Slate base color, CSS variables).
@@ -187,5 +399,10 @@ The reusable scaffolding every CRUD module (Sprint 4+) builds its actual pages f
 - Formatting utilities matching the backend's Decimal precision (currency: 2dp, quantity: 3dp, rate: 4dp).
 - Full global UX infrastructure — loading/skeletons, empty/error states, dialogs, toasts, shared page components, error-handling hooks — see above.
 - Full reusable page templates and navigation infrastructure — List/Detail/Form/Settings/Report templates, Toolbars, Filter Bar, data-display primitives — see above.
+- The Enterprise Data Table (`src/components/data-table/`) — see above. `@tanstack/react-table` added as a dependency in Session 1.
+- Enterprise Form Components (`src/components/form/`) — see above. `react-day-picker`, `cmdk` added as dependencies in Session 2.
+- Filtering, Search & Pagination (`src/components/filters/`, `src/components/pagination/`, three new hooks) — see above.
+- Charts & Reporting Components (`src/components/charts/`, `src/components/reports/`, `src/components/dashboard/`) — see above. `recharts` already present as a dependency.
+- Session 5's component library finalization pass — consistency/accessibility/dark-mode/documentation audit across all of the above — see above.
 
-Next up: the shared Enterprise Data Table / Form field primitives (Combobox, Currency/Number/Date inputs — Sprint 2 Component Library work) and then the first real business module (Companies, per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s Masters-first sequencing) — List/Create/Detail/Edit pages that finally instantiate this session's templates with real data instead of as unconsumed infra.
+Next up: the first real business module (Companies, per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s Masters-first sequencing) — List/Create/Detail/Edit pages that finally instantiate the Data Table, Form Components, Filters, and page templates with real data instead of as unconsumed infra.
