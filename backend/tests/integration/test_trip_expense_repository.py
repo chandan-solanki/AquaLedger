@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.models import Tenant
 from app.modules.boats.models import Boat
-from app.modules.companies.models import Company
 from app.modules.trip_expenses.constants import ExpenseType
 from app.modules.trip_expenses.models import TripExpense
 from app.modules.trip_expenses.repository import TripExpenseRepository
@@ -37,28 +36,9 @@ async def tenant_id(db_session: AsyncSession) -> uuid.UUID:
     return tenant.id
 
 
-async def _make_company(
-    db_session: AsyncSession, tenant_id: uuid.UUID, **overrides: Any
-) -> Company:
+async def _make_boat(db_session: AsyncSession, tenant_id: uuid.UUID, **overrides: Any) -> Boat:
     defaults: dict[str, Any] = {
         "tenant_id": tenant_id,
-        "code": f"CO-{uuid.uuid4().hex[:8]}",
-        "name": f"Company {uuid.uuid4().hex[:8]}",
-        "company_type": "customer",
-    }
-    defaults.update(overrides)
-    company = Company(**defaults)
-    db_session.add(company)
-    await db_session.commit()
-    return company
-
-
-async def _make_boat(
-    db_session: AsyncSession, tenant_id: uuid.UUID, company_id: uuid.UUID, **overrides: Any
-) -> Boat:
-    defaults: dict[str, Any] = {
-        "tenant_id": tenant_id,
-        "company_id": company_id,
         "code": f"B-{uuid.uuid4().hex[:8]}",
         "name": f"Boat {uuid.uuid4().hex[:8]}",
         "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
@@ -91,25 +71,16 @@ async def _make_trip(
 async def _fresh_trip_id(
     db_session: AsyncSession, tenant_id: uuid.UUID, **overrides: Any
 ) -> uuid.UUID:
-    """A trip on its own boat/company, for tests that need multiple distinct
-    trips without caring about boat-sharing rules."""
-    company = await _make_company(db_session, tenant_id)
-    boat = await _make_boat(db_session, tenant_id, company.id)
+    """A trip on its own boat, for tests that need multiple distinct trips
+    without caring about boat-sharing rules."""
+    boat = await _make_boat(db_session, tenant_id)
     trip = await _make_trip(db_session, tenant_id, boat.id, **overrides)
     return trip.id
 
 
 @pytest.fixture
-async def company_id(db_session: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
-    company = await _make_company(db_session, tenant_id)
-    return company.id
-
-
-@pytest.fixture
-async def boat_id(
-    db_session: AsyncSession, tenant_id: uuid.UUID, company_id: uuid.UUID
-) -> uuid.UUID:
-    boat = await _make_boat(db_session, tenant_id, company_id)
+async def boat_id(db_session: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
+    boat = await _make_boat(db_session, tenant_id)
     return boat.id
 
 
@@ -503,8 +474,7 @@ class TestSearchTenantScoping:
         )
         db_session.add(other_tenant)
         await db_session.commit()
-        other_company = await _make_company(db_session, other_tenant.id)
-        other_boat = await _make_boat(db_session, other_tenant.id, other_company.id)
+        other_boat = await _make_boat(db_session, other_tenant.id)
         other_trip = await _make_trip(db_session, other_tenant.id, other_boat.id)
 
         mine = await _make_trip_expense(db_session, tenant_id, trip_id)

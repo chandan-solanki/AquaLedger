@@ -27,7 +27,6 @@ class BoatResponse(BaseModel):
             "example": {
                 "id": "019f83c8-6489-7bcf-beba-c241b7abbb03",
                 "tenant_id": "019f7af3-83ae-783a-b139-40a239786b2f",
-                "company_id": "019f7af3-9c1e-73aa-9c2e-2a6a6e6a6a6a",
                 "code": "BOAT-001",
                 "name": "Sea Falcon",
                 "registration_number": "MH-01-AB-1234",
@@ -50,7 +49,6 @@ class BoatResponse(BaseModel):
 
     id: uuid.UUID
     tenant_id: uuid.UUID
-    company_id: uuid.UUID
     code: str
     name: str
     registration_number: str
@@ -76,7 +74,6 @@ class BoatCreateRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "company_id": "019f7af3-9c1e-73aa-9c2e-2a6a6e6a6a6a",
                 "code": "BOAT-001",
                 "name": "Sea Falcon",
                 "registration_number": "MH-01-AB-1234",
@@ -93,7 +90,6 @@ class BoatCreateRequest(BaseModel):
         }
     )
 
-    company_id: uuid.UUID = Field(description="Owning company - must exist for this tenant.")
     code: str = Field(
         min_length=1, max_length=50, examples=["BOAT-001"], description="Unique per tenant."
     )
@@ -133,9 +129,6 @@ class BoatUpdateRequest(BaseModel):
         }
     )
 
-    company_id: uuid.UUID | None = Field(
-        default=None, description="Reassign the owning company - must exist for this tenant."
-    )
     code: str | None = Field(default=None, min_length=1, max_length=50)
     name: str | None = Field(default=None, min_length=1, max_length=255)
     registration_number: str | None = Field(default=None, min_length=1, max_length=50)
@@ -168,7 +161,6 @@ class BoatListParams(BaseModel):
         examples=["falcon"],
     )
     boat_type: str | None = Field(default=None, max_length=50, examples=["trawler"])
-    company_id: uuid.UUID | None = Field(default=None, description="Filter by owning company.")
     is_active: bool | None = Field(default=None, examples=[True])
     insurance_expired: bool | None = Field(
         default=None,

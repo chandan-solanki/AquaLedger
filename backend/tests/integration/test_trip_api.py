@@ -13,9 +13,9 @@ from app.modules.trips.models import Trip
 SUPER_ADMIN_EMAIL = "admin@fisherp.local"
 SUPER_ADMIN_PASSWORD = "Admin@123"
 
-# _create_trip provisions a fresh owning boat (and that boat's owning
-# company) via the API by default, so test users need enough boat/company
-# access for that setup step to succeed too.
+# _create_trip provisions a fresh owning boat via the API by default, so
+# test users need enough boat-module access for that setup step to succeed
+# too.
 _ALL_TRIP_PERMISSIONS = [
     "trip:view",
     "trip:create",
@@ -23,8 +23,6 @@ _ALL_TRIP_PERMISSIONS = [
     "trip:delete",
     "boat:view",
     "boat:create",
-    "company:view",
-    "company:create",
 ]
 _DEPARTURE = "2026-08-01T04:00:00Z"
 
@@ -66,33 +64,10 @@ async def _make_user_headers(
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _create_company(
+async def _create_boat(
     client: AsyncClient, headers: dict[str, str], **overrides: Any
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "code": f"TCO-{uuid.uuid4().hex[:8]}",
-        "name": f"Trip Owner {uuid.uuid4().hex[:8]}",
-        "company_type": "customer",
-    }
-    payload.update(overrides)
-    response = await client.post("/api/v1/companies", json=payload, headers=headers)
-    assert response.status_code == 201, response.text
-    result: dict[str, Any] = response.json()
-    return result
-
-
-async def _create_boat(
-    client: AsyncClient,
-    headers: dict[str, str],
-    *,
-    company_id: str | None = None,
-    **overrides: Any,
-) -> dict[str, Any]:
-    if company_id is None:
-        company = await _create_company(client, headers)
-        company_id = company["id"]
-    payload: dict[str, Any] = {
-        "company_id": company_id,
         "code": f"TB-{uuid.uuid4().hex[:8]}",
         "name": f"Boat {uuid.uuid4().hex[:8]}",
         "registration_number": f"TREG-{uuid.uuid4().hex[:8]}",

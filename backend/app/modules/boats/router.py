@@ -26,9 +26,6 @@ _COMMON_ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
 _NOT_FOUND_RESPONSE: dict[int | str, dict[str, object]] = {
     404: {"model": ErrorResponse, "description": "Boat not found"},
 }
-_COMPANY_NOT_FOUND_RESPONSE: dict[int | str, dict[str, object]] = {
-    404: {"model": ErrorResponse, "description": "Boat or referenced company not found"},
-}
 _DUPLICATE_RESPONSE: dict[int | str, dict[str, object]] = {
     409: {"model": ErrorResponse, "description": "Duplicate boat code or registration number"},
 }
@@ -41,10 +38,10 @@ _DUPLICATE_RESPONSE: dict[int | str, dict[str, object]] = {
     summary="Create a boat",
     description=(
         "`code` and `registration_number` must each be unique per tenant; both return "
-        "409 on conflict. `company_id` must reference an existing, non-deleted company "
-        "for the caller's tenant, or this returns 404."
+        "409 on conflict. The boat belongs to the caller's tenant only - there is no "
+        "owning company."
     ),
-    responses={**_COMMON_ERROR_RESPONSES, **_COMPANY_NOT_FOUND_RESPONSE, **_DUPLICATE_RESPONSE},
+    responses={**_COMMON_ERROR_RESPONSES, **_DUPLICATE_RESPONSE},
     dependencies=[Depends(require_permission(BOAT_CREATE))],
 )
 async def create_boat(
@@ -60,7 +57,6 @@ _LIST_RESPONSE_EXAMPLE: dict[str, object] = {
         {
             "id": "019f83c8-6489-7bcf-beba-c241b7abbb03",
             "tenant_id": "019f7af3-83ae-783a-b139-40a239786b2f",
-            "company_id": "019f7af3-9c1e-73aa-9c2e-2a6a6e6a6a6a",
             "code": "BOAT-001",
             "name": "Sea Falcon",
             "registration_number": "MH-01-AB-1234",
@@ -97,7 +93,7 @@ _LIST_RESPONSE_EXAMPLE: dict[str, object] = {
     description=(
         "Every non-deleted boat for the caller's tenant. `q` searches name, code, "
         "registration_number and captain_name (case-insensitive substring). Combine "
-        "with boat_type/company_id/is_active/insurance_expired/license_expired filters, "
+        "with boat_type/is_active/insurance_expired/license_expired filters, "
         "`sort` (e.g. `name`, `-created_at`) and page/page_size."
     ),
     responses={
@@ -135,10 +131,9 @@ async def get_boat(
     summary="Update a boat",
     description=(
         "Partial update: only fields present in the request body are changed. "
-        "A soft-deleted boat is treated as not found. If `company_id` is included, "
-        "it must reference an existing, non-deleted company for the caller's tenant."
+        "A soft-deleted boat is treated as not found."
     ),
-    responses={**_COMMON_ERROR_RESPONSES, **_COMPANY_NOT_FOUND_RESPONSE, **_DUPLICATE_RESPONSE},
+    responses={**_COMMON_ERROR_RESPONSES, **_NOT_FOUND_RESPONSE, **_DUPLICATE_RESPONSE},
     dependencies=[Depends(require_permission(BOAT_EDIT))],
 )
 async def update_boat(

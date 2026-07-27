@@ -14,17 +14,7 @@ from app.modules.boats.models import Boat
 SUPER_ADMIN_EMAIL = "admin@fisherp.local"
 SUPER_ADMIN_PASSWORD = "Admin@123"
 
-# Includes company:view/create too - _create_boat provisions a fresh owning
-# company via the API on behalf of these test users, so they need enough
-# company-module access for that setup step to succeed.
-_ALL_BOAT_PERMISSIONS = [
-    "boat:view",
-    "boat:create",
-    "boat:edit",
-    "boat:delete",
-    "company:view",
-    "company:create",
-]
+_ALL_BOAT_PERMISSIONS = ["boat:view", "boat:create", "boat:edit", "boat:delete"]
 _PAST = (date.today() - timedelta(days=30)).isoformat()
 _FUTURE = (date.today() + timedelta(days=30)).isoformat()
 
@@ -66,33 +56,10 @@ async def _make_user_headers(
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _create_company(
+async def _create_boat(
     client: AsyncClient, headers: dict[str, str], **overrides: Any
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "code": f"BCO-{uuid.uuid4().hex[:8]}",
-        "name": f"Boat Owner {uuid.uuid4().hex[:8]}",
-        "company_type": "customer",
-    }
-    payload.update(overrides)
-    response = await client.post("/api/v1/companies", json=payload, headers=headers)
-    assert response.status_code == 201, response.text
-    result: dict[str, Any] = response.json()
-    return result
-
-
-async def _create_boat(
-    client: AsyncClient,
-    headers: dict[str, str],
-    *,
-    company_id: str | None = None,
-    **overrides: Any,
-) -> dict[str, Any]:
-    if company_id is None:
-        company = await _create_company(client, headers)
-        company_id = company["id"]
-    payload: dict[str, Any] = {
-        "company_id": company_id,
         "code": f"B-{uuid.uuid4().hex[:8]}",
         "name": f"Boat {uuid.uuid4().hex[:8]}",
         "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
@@ -108,12 +75,7 @@ class TestCreateBoat:
     async def test_requires_authentication(self, client: AsyncClient) -> None:
         response = await client.post(
             "/api/v1/boats",
-            json={
-                "company_id": str(uuid.uuid4()),
-                "code": "X",
-                "name": "X",
-                "registration_number": "X",
-            },
+            json={"code": "X", "name": "X", "registration_number": "X"},
         )
         assert response.status_code == 401
 
@@ -124,12 +86,7 @@ class TestCreateBoat:
         headers = await _make_user_headers(db_session, tenant_id, ["boat:view"])
         response = await client.post(
             "/api/v1/boats",
-            json={
-                "company_id": str(uuid.uuid4()),
-                "code": "X",
-                "name": "X",
-                "registration_number": "X",
-            },
+            json={"code": "X", "name": "X", "registration_number": "X"},
             headers=headers,
         )
         assert response.status_code == 403
@@ -145,6 +102,7 @@ class TestCreateBoat:
         assert body["name"] == unique_name
         assert body["is_active"] is True
         assert body["created_at"] == body["updated_at"]
+        assert "company_id" not in body
 
         admin = (
             await db_session.execute(select(User).where(User.email == SUPER_ADMIN_EMAIL))
@@ -158,12 +116,10 @@ class TestCreateBoat:
 
     async def test_duplicate_code_is_409(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
-        company = await _create_company(client, headers)
-        await _create_boat(client, headers, company_id=company["id"], code="DUP-CODE")
+        await _create_boat(client, headers, code="DUP-CODE")
         response = await client.post(
             "/api/v1/boats",
             json={
-                "company_id": company["id"],
                 "code": "DUP-CODE",
                 "name": "Second Boat",
                 "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
@@ -175,12 +131,10 @@ class TestCreateBoat:
 
     async def test_duplicate_registration_number_is_409(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
-        company = await _create_company(client, headers)
-        await _create_boat(client, headers, company_id=company["id"], registration_number="DUP-REG")
+        await _create_boat(client, headers, registration_number="DUP-REG")
         response = await client.post(
             "/api/v1/boats",
             json={
-                "company_id": company["id"],
                 "code": f"B-{uuid.uuid4().hex[:8]}",
                 "name": "Second Boat",
                 "registration_number": "DUP-REG",
@@ -190,55 +144,11 @@ class TestCreateBoat:
         assert response.status_code == 409
         assert response.json()["error"]["code"] == "DUPLICATE_BOAT_REGISTRATION_NUMBER"
 
-    async def test_cannot_assign_a_boat_to_another_tenants_company(
-        self, client: AsyncClient, db_session: AsyncSession
-    ) -> None:
-        """A company id that is real but belongs to a different tenant must
-        be rejected exactly like an unknown one - otherwise company_id would
-        be a side-channel to probe or attach to other tenants' data."""
-        headers = await _admin_headers(client)
-
-        other_tenant = Tenant(name="Foreign Owner Co", slug=f"foreign-owner-{uuid.uuid4().hex[:8]}")
-        db_session.add(other_tenant)
-        await db_session.commit()
-        other_headers = await _make_user_headers(db_session, other_tenant.id, _ALL_BOAT_PERMISSIONS)
-        foreign_company = await _create_company(client, other_headers)
-
-        response = await client.post(
-            "/api/v1/boats",
-            json={
-                "company_id": foreign_company["id"],
-                "code": f"B-{uuid.uuid4().hex[:8]}",
-                "name": "Cross Tenant Boat",
-                "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
-            },
-            headers=headers,
-        )
-        assert response.status_code == 404
-        assert response.json()["error"]["code"] == "BOAT_COMPANY_NOT_FOUND"
-
-    async def test_unknown_company_is_404(self, client: AsyncClient) -> None:
-        headers = await _admin_headers(client)
-        response = await client.post(
-            "/api/v1/boats",
-            json={
-                "company_id": str(uuid.uuid4()),
-                "code": f"B-{uuid.uuid4().hex[:8]}",
-                "name": "Orphan Boat",
-                "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
-            },
-            headers=headers,
-        )
-        assert response.status_code == 404
-        assert response.json()["error"]["code"] == "BOAT_COMPANY_NOT_FOUND"
-
     async def test_invalid_captain_phone_is_422(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
-        company = await _create_company(client, headers)
         response = await client.post(
             "/api/v1/boats",
             json={
-                "company_id": company["id"],
                 "code": f"B-{uuid.uuid4().hex[:8]}",
                 "name": "V1",
                 "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
@@ -251,11 +161,9 @@ class TestCreateBoat:
 
     async def test_blank_code_is_422(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
-        company = await _create_company(client, headers)
         response = await client.post(
             "/api/v1/boats",
             json={
-                "company_id": company["id"],
                 "code": "",
                 "name": "V2",
                 "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
@@ -267,11 +175,9 @@ class TestCreateBoat:
 
     async def test_blank_registration_number_is_422(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
-        company = await _create_company(client, headers)
         response = await client.post(
             "/api/v1/boats",
             json={
-                "company_id": company["id"],
                 "code": f"B-{uuid.uuid4().hex[:8]}",
                 "name": "V3",
                 "registration_number": "",
@@ -280,20 +186,6 @@ class TestCreateBoat:
         )
         assert response.status_code == 422
         assert "registration_number" in response.json()["error"]["field_errors"]
-
-    async def test_missing_company_id_is_422(self, client: AsyncClient) -> None:
-        headers = await _admin_headers(client)
-        response = await client.post(
-            "/api/v1/boats",
-            json={
-                "code": f"B-{uuid.uuid4().hex[:8]}",
-                "name": "V4",
-                "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
-            },
-            headers=headers,
-        )
-        assert response.status_code == 422
-        assert "company_id" in response.json()["error"]["field_errors"]
 
 
 class TestGetBoat:
@@ -426,27 +318,6 @@ class TestListBoats:
         )
         names = [b["name"] for b in response.json()["data"]]
         assert names == ["Match Boat"]
-
-    async def test_filters_by_company_id(
-        self, client: AsyncClient, db_session: AsyncSession
-    ) -> None:
-        other_tenant = Tenant(
-            name="Company Filter Tenant", slug=f"co-filter-{uuid.uuid4().hex[:8]}"
-        )
-        db_session.add(other_tenant)
-        await db_session.commit()
-        headers = await _make_user_headers(db_session, other_tenant.id, _ALL_BOAT_PERMISSIONS)
-
-        company_a = await _create_company(client, headers)
-        company_b = await _create_company(client, headers)
-        target = await _create_boat(client, headers, company_id=company_a["id"], name="Boat A")
-        await _create_boat(client, headers, company_id=company_b["id"], name="Boat B")
-
-        response = await client.get(
-            "/api/v1/boats", params={"company_id": company_a["id"]}, headers=headers
-        )
-        ids = [b["id"] for b in response.json()["data"]]
-        assert ids == [target["id"]]
 
     async def test_filters_by_insurance_expired(
         self, client: AsyncClient, db_session: AsyncSession
@@ -619,9 +490,8 @@ class TestUpdateBoat:
 
     async def test_recoding_to_another_boats_code_is_409(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
-        company = await _create_company(client, headers)
-        await _create_boat(client, headers, company_id=company["id"], code="EXISTING-CODE")
-        target = await _create_boat(client, headers, company_id=company["id"], code="RECODABLE")
+        await _create_boat(client, headers, code="EXISTING-CODE")
+        target = await _create_boat(client, headers, code="RECODABLE")
 
         response = await client.put(
             f"/api/v1/boats/{target['id']}",
@@ -635,13 +505,8 @@ class TestUpdateBoat:
         self, client: AsyncClient
     ) -> None:
         headers = await _admin_headers(client)
-        company = await _create_company(client, headers)
-        await _create_boat(
-            client, headers, company_id=company["id"], registration_number="EXISTING-REG"
-        )
-        target = await _create_boat(
-            client, headers, company_id=company["id"], registration_number="CHANGEABLE-REG"
-        )
+        await _create_boat(client, headers, registration_number="EXISTING-REG")
+        target = await _create_boat(client, headers, registration_number="CHANGEABLE-REG")
 
         response = await client.put(
             f"/api/v1/boats/{target['id']}",
@@ -650,31 +515,6 @@ class TestUpdateBoat:
         )
         assert response.status_code == 409
         assert response.json()["error"]["code"] == "DUPLICATE_BOAT_REGISTRATION_NUMBER"
-
-    async def test_reassigning_to_unknown_company_is_404(self, client: AsyncClient) -> None:
-        headers = await _admin_headers(client)
-        created = await _create_boat(client, headers)
-
-        response = await client.put(
-            f"/api/v1/boats/{created['id']}",
-            json={"company_id": str(uuid.uuid4())},
-            headers=headers,
-        )
-        assert response.status_code == 404
-        assert response.json()["error"]["code"] == "BOAT_COMPANY_NOT_FOUND"
-
-    async def test_reassigning_to_an_existing_company_succeeds(self, client: AsyncClient) -> None:
-        headers = await _admin_headers(client)
-        created = await _create_boat(client, headers)
-        new_company = await _create_company(client, headers)
-
-        response = await client.put(
-            f"/api/v1/boats/{created['id']}",
-            json={"company_id": new_company["id"]},
-            headers=headers,
-        )
-        assert response.status_code == 200
-        assert response.json()["company_id"] == new_company["id"]
 
     async def test_update_bumps_updated_at_and_sets_updated_by(
         self, client: AsyncClient, db_session: AsyncSession

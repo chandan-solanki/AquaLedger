@@ -167,10 +167,9 @@ async def _create_fish(
 
 
 async def _create_boat(
-    client: AsyncClient, headers: dict[str, str], *, company_id: str, **overrides: Any
+    client: AsyncClient, headers: dict[str, str], **overrides: Any
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "company_id": company_id,
         "code": f"OUTB-{uuid.uuid4().hex[:8]}",
         "name": f"Outstanding Boat {uuid.uuid4().hex[:8]}",
         "registration_number": f"OUTREG-{uuid.uuid4().hex[:8]}",
@@ -183,9 +182,9 @@ async def _create_boat(
 
 
 async def _create_returned_trip(
-    client: AsyncClient, headers: dict[str, str], *, company_id: str, **overrides: Any
+    client: AsyncClient, headers: dict[str, str], **overrides: Any
 ) -> dict[str, Any]:
-    boat_id = (await _create_boat(client, headers, company_id=company_id))["id"]
+    boat_id = (await _create_boat(client, headers))["id"]
     payload: dict[str, Any] = {
         "boat_id": boat_id,
         "trip_number": f"OUTTRIP-{uuid.uuid4().hex[:8]}",
@@ -207,9 +206,9 @@ async def _create_returned_trip(
 
 
 async def _create_trip_catch(
-    client: AsyncClient, headers: dict[str, str], *, company_id: str, **overrides: Any
+    client: AsyncClient, headers: dict[str, str], **overrides: Any
 ) -> dict[str, Any]:
-    trip_id = (await _create_returned_trip(client, headers, company_id=company_id))["id"]
+    trip_id = (await _create_returned_trip(client, headers))["id"]
     fish_id = (await _create_fish(client, headers))["id"]
     payload: dict[str, Any] = {
         "trip_id": trip_id,
@@ -236,7 +235,7 @@ async def _create_issued_invoice(
     no tax/discount) - the default 10 x 100 = 1000.00 matches
     _create_payment's default amount."""
     invoice = await _create_draft_invoice(client, headers, company_id=company_id)
-    trip_catch = await _create_trip_catch(client, headers, company_id=company_id)
+    trip_catch = await _create_trip_catch(client, headers)
     item_response = await client.post(
         f"/api/v1/invoices/{invoice['id']}/items",
         json={

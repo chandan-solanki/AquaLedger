@@ -341,9 +341,23 @@ fish_grades(id, tenant_id, fish_id NULL, name, sort_order)
 ```
 boats(id, tenant_id, name, registration_number UNIQUE(tenant_id,·),
       boat_type, capacity_tons NUMERIC(10,2), engine_details,
-      owner_name, owner_company_id FK companies NULL,
-      ownership_type,             -- owned | leased | partner
+      captain_name, captain_phone,
       purchase_date, status, ...audit)
+
+**As built (Sprint 5):** `owner_company_id` above was a design error, caught
+and corrected in a dedicated Sprint 5 refactor — a `Company` is a customer
+(buyer), per this document's own Context section (§0) and Business Model,
+never a boat owner. **A boat belongs to `tenant_id` only.** The implemented
+`boats` table also differs in shape from the sketch above: `code` (unique
+per tenant, alongside `registration_number`), `license_number`,
+`capacity_kg NUMERIC(12,3)` (not `capacity_tons`), `engine_number` +
+`engine_hp` (not free-text `engine_details`), `captain_name` +
+`captain_phone` inline (no separate `crew_members`/`boat_crew` tables yet —
+those remain future work), `insurance_expiry` + `license_expiry` (compliance
+dates), `notes`, `is_active`. No `ownership_type`/`owner_name`/
+`purchase_date` were built. Correct business flow: `Tenant → Boats → Trips →
+Trip Catch → Invoice → Company (customer) → Payment`; purchases remain
+`Supplier → Purchase Bill → Supplier Payment`, unrelated to boats.
 
 crew_members(id, tenant_id, full_name, role,   -- captain | engineer | crew
              phone, id_proof_type, id_proof_number,

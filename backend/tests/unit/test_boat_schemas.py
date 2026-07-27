@@ -1,4 +1,3 @@
-import uuid
 from decimal import Decimal
 
 import pytest
@@ -7,7 +6,6 @@ from pydantic import ValidationError
 from app.modules.boats.schemas import BoatCreateRequest, BoatListParams, BoatUpdateRequest
 
 _MINIMAL: dict[str, object] = {
-    "company_id": uuid.uuid4(),
     "code": "B-1",
     "name": "Sea Falcon",
     "registration_number": "REG-1",
@@ -34,15 +32,6 @@ class TestBoatCreateRequestDefaults:
     def test_rejects_blank_registration_number(self) -> None:
         with pytest.raises(ValidationError):
             BoatCreateRequest(**{**_MINIMAL, "registration_number": ""})
-
-    def test_rejects_missing_company_id(self) -> None:
-        payload = {k: v for k, v in _MINIMAL.items() if k != "company_id"}
-        with pytest.raises(ValidationError):
-            BoatCreateRequest(**payload)
-
-    def test_rejects_invalid_company_id(self) -> None:
-        with pytest.raises(ValidationError):
-            BoatCreateRequest(**{**_MINIMAL, "company_id": "not-a-uuid"})
 
 
 class TestCaptainPhoneValidation:
@@ -103,11 +92,6 @@ class TestBoatUpdateRequestPartialSemantics:
         with pytest.raises(ValidationError):
             BoatUpdateRequest(captain_phone="bad-phone")
 
-    def test_company_id_can_be_reassigned(self) -> None:
-        new_company_id = uuid.uuid4()
-        request = BoatUpdateRequest(company_id=new_company_id)
-        assert request.model_dump(exclude_unset=True) == {"company_id": new_company_id}
-
 
 class TestBoatListParams:
     def test_defaults(self) -> None:
@@ -117,7 +101,6 @@ class TestBoatListParams:
         assert params.sort == "-created_at"
         assert params.q is None
         assert params.boat_type is None
-        assert params.company_id is None
         assert params.is_active is None
         assert params.insurance_expired is None
         assert params.license_expired is None

@@ -21,16 +21,16 @@ from uuid6 import uuid7
 from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
-    from app.modules.companies.models import Company
     from app.modules.trips.models import Trip
 
 
 class Boat(TimestampMixin, Base):
-    """Fishing boats owned by a company (ARCHITECTURE.md §5.2 `boats`).
+    """Fishing boats owned by the tenant (ARCHITECTURE.md §5.2 `boats`).
 
-    Sprint 5 - boat master data only; no trip/catch/invoice logic yet
-    (see TASKS.md). Soft-deleted (ARCHITECTURE.md §38 - referenced by
-    future trip history).
+    Ownership is `tenant_id` only - a boat belongs to the fishing business
+    itself, never to a `Company` (a `Company` is a customer/buyer, per
+    ARCHITECTURE.md's Business Model). Soft-deleted (ARCHITECTURE.md §38 -
+    referenced by trip history).
     """
 
     __tablename__ = "boats"
@@ -38,9 +38,6 @@ class Boat(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid7)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False
-    )
-    company_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False
     )
     code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -63,7 +60,6 @@ class Boat(TimestampMixin, Base):
     deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
 
-    company: Mapped["Company"] = relationship(back_populates="boats")
     trips: Mapped[list["Trip"]] = relationship(back_populates="boat")
 
     __table_args__ = (
@@ -82,10 +78,4 @@ class Boat(TimestampMixin, Base):
             postgresql_where=deleted_at.is_(None),
         ),
         Index("ix_boats_tenant", "tenant_id", postgresql_where=deleted_at.is_(None)),
-        Index(
-            "ix_boats_tenant_company",
-            "tenant_id",
-            "company_id",
-            postgresql_where=deleted_at.is_(None),
-        ),
     )

@@ -92,12 +92,9 @@ async def _make_invoice(
     return invoice
 
 
-async def _make_boat(
-    db_session: AsyncSession, tenant_id: uuid.UUID, company_id: uuid.UUID, **overrides: Any
-) -> Boat:
+async def _make_boat(db_session: AsyncSession, tenant_id: uuid.UUID, **overrides: Any) -> Boat:
     defaults: dict[str, Any] = {
         "tenant_id": tenant_id,
-        "company_id": company_id,
         "code": f"B-{uuid.uuid4().hex[:8]}",
         "name": f"Boat {uuid.uuid4().hex[:8]}",
         "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
@@ -164,10 +161,8 @@ async def _make_trip_catch(
 
 
 @pytest.fixture
-async def boat_id(
-    db_session: AsyncSession, tenant_id: uuid.UUID, company_id: uuid.UUID
-) -> uuid.UUID:
-    boat = await _make_boat(db_session, tenant_id, company_id)
+async def boat_id(db_session: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
+    boat = await _make_boat(db_session, tenant_id)
     return boat.id
 
 

@@ -135,12 +135,9 @@ async def _create_fish(
 
 
 async def _create_boat(
-    client: AsyncClient, headers: dict[str, str], *, company_id: str | None = None, **overrides: Any
+    client: AsyncClient, headers: dict[str, str], **overrides: Any
 ) -> dict[str, Any]:
-    if company_id is None:
-        company_id = (await _create_company(client, headers))["id"]
     payload: dict[str, Any] = {
-        "company_id": company_id,
         "code": f"ISSB-{uuid.uuid4().hex[:8]}",
         "name": f"Issue Boat {uuid.uuid4().hex[:8]}",
         "registration_number": f"ISSREG-{uuid.uuid4().hex[:8]}",

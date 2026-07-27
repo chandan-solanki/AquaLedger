@@ -22,17 +22,18 @@ from app.db.base import Base, TimestampMixin
 from app.modules.companies.constants import CompanyStatus, CompanyType, OpeningBalanceType
 
 if TYPE_CHECKING:
-    from app.modules.boats.models import Boat
     from app.modules.invoices.models import Invoice
     from app.modules.payments.models import Payment
 
 
 class Company(TimestampMixin, Base):
-    """Customers, suppliers and companies that buy or sell fish.
+    """Customers that buy fish after trips - never an owner of boats.
 
-    Soft-deleted (ARCHITECTURE.md §38 - referenced by invoice/payment history).
-    `outstanding_amount` is a denormalized cache maintained by the invoicing/
-    payments modules (§5.3); it is not written to here.
+    Boat ownership is `tenant_id` only (ARCHITECTURE.md's Business Model:
+    Tenant -> Boats, Company -> Customer). Soft-deleted (ARCHITECTURE.md §38
+    - referenced by invoice/payment history). `outstanding_amount` is a
+    denormalized cache maintained by the invoicing/payments modules (§5.3);
+    it is not written to here.
     """
 
     __tablename__ = "companies"
@@ -87,7 +88,6 @@ class Company(TimestampMixin, Base):
     deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
 
-    boats: Mapped[list["Boat"]] = relationship(back_populates="company")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="company")
     payments: Mapped[list["Payment"]] = relationship(back_populates="company")
 

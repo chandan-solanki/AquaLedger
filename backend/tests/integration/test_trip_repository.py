@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.models import Tenant
 from app.modules.boats.models import Boat
-from app.modules.companies.models import Company
 from app.modules.trips.constants import TripStatus, TripType
 from app.modules.trips.models import Trip
 from app.modules.trips.repository import TripRepository
@@ -33,28 +32,9 @@ async def tenant_id(db_session: AsyncSession) -> uuid.UUID:
     return tenant.id
 
 
-async def _make_company(
-    db_session: AsyncSession, tenant_id: uuid.UUID, **overrides: Any
-) -> Company:
+async def _make_boat(db_session: AsyncSession, tenant_id: uuid.UUID, **overrides: Any) -> Boat:
     defaults: dict[str, Any] = {
         "tenant_id": tenant_id,
-        "code": f"CO-{uuid.uuid4().hex[:8]}",
-        "name": f"Company {uuid.uuid4().hex[:8]}",
-        "company_type": "customer",
-    }
-    defaults.update(overrides)
-    company = Company(**defaults)
-    db_session.add(company)
-    await db_session.commit()
-    return company
-
-
-async def _make_boat(
-    db_session: AsyncSession, tenant_id: uuid.UUID, company_id: uuid.UUID, **overrides: Any
-) -> Boat:
-    defaults: dict[str, Any] = {
-        "tenant_id": tenant_id,
-        "company_id": company_id,
         "code": f"B-{uuid.uuid4().hex[:8]}",
         "name": f"Boat {uuid.uuid4().hex[:8]}",
         "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
@@ -70,22 +50,13 @@ async def _fresh_boat_id(db_session: AsyncSession, tenant_id: uuid.UUID) -> uuid
     """A boat on its own, unshared with any other trip - needed whenever a
     test wants two simultaneously PLANNED/DEPARTED trips, since
     ix_trips_boat_single_active (models.py) now forbids that on one boat."""
-    company = await _make_company(db_session, tenant_id)
-    boat = await _make_boat(db_session, tenant_id, company.id)
+    boat = await _make_boat(db_session, tenant_id)
     return boat.id
 
 
 @pytest.fixture
-async def company_id(db_session: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
-    company = await _make_company(db_session, tenant_id)
-    return company.id
-
-
-@pytest.fixture
-async def boat_id(
-    db_session: AsyncSession, tenant_id: uuid.UUID, company_id: uuid.UUID
-) -> uuid.UUID:
-    boat = await _make_boat(db_session, tenant_id, company_id)
+async def boat_id(db_session: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
+    boat = await _make_boat(db_session, tenant_id)
     return boat.id
 
 
@@ -184,9 +155,8 @@ class TestSearchFilters:
     async def test_filters_by_boat_id(
         self, repo: TripRepository, db_session: AsyncSession, tenant_id: uuid.UUID
     ) -> None:
-        company = await _make_company(db_session, tenant_id)
-        boat_a = await _make_boat(db_session, tenant_id, company.id)
-        boat_b = await _make_boat(db_session, tenant_id, company.id)
+        boat_a = await _make_boat(db_session, tenant_id)
+        boat_b = await _make_boat(db_session, tenant_id)
         target = await _make_trip(db_session, tenant_id, boat_a.id)
         await _make_trip(db_session, tenant_id, boat_b.id)
 
@@ -283,8 +253,7 @@ class TestSearchFilters:
     async def test_combines_filters(
         self, repo: TripRepository, db_session: AsyncSession, tenant_id: uuid.UUID
     ) -> None:
-        company = await _make_company(db_session, tenant_id)
-        boat = await _make_boat(db_session, tenant_id, company.id)
+        boat = await _make_boat(db_session, tenant_id)
         target = await _make_trip(
             db_session, tenant_id, boat.id, trip_type=TripType.FISHING, status=TripStatus.PLANNED
         )
@@ -360,8 +329,7 @@ class TestSearchQuery:
         """Boat-name search is resolved by the service layer (BoatService),
         not joined here - the repository only accepts the already-matched
         boat ids via `q_boat_ids` (ARCHITECTURE.md §2)."""
-        company = await _make_company(db_session, tenant_id)
-        other_boat = await _make_boat(db_session, tenant_id, company.id)
+        other_boat = await _make_boat(db_session, tenant_id)
         on_target_boat = await _make_trip(
             db_session, tenant_id, boat_id, trip_number="NO-TEXT-MATCH-1"
         )
@@ -512,8 +480,7 @@ class TestSearchTenantScoping:
         other_tenant = Tenant(name="Other Trip Tenant", slug=f"other-trip-{uuid.uuid4().hex[:8]}")
         db_session.add(other_tenant)
         await db_session.commit()
-        other_company = await _make_company(db_session, other_tenant.id)
-        other_boat = await _make_boat(db_session, other_tenant.id, other_company.id)
+        other_boat = await _make_boat(db_session, other_tenant.id)
 
         mine = await _make_trip(db_session, tenant_id, boat_id, trip_number="Mine")
         await _make_trip(db_session, other_tenant.id, other_boat.id, trip_number="Not Mine")

@@ -2,7 +2,6 @@ import pytest
 
 from app.core.errors import AppException, ConflictError, NotFoundError
 from app.modules.boats.exceptions import (
-    BoatCompanyNotFoundError,
     BoatNotFoundError,
     DuplicateBoatCodeError,
     DuplicateBoatRegistrationNumberError,
@@ -20,7 +19,6 @@ from app.modules.boats.exceptions import (
             "DUPLICATE_BOAT_REGISTRATION_NUMBER",
             ConflictError,
         ),
-        (BoatCompanyNotFoundError, 404, "BOAT_COMPANY_NOT_FOUND", NotFoundError),
     ],
 )
 def test_boat_exception_status_and_code(
@@ -43,11 +41,3 @@ def test_duplicate_errors_are_not_not_found_errors() -> None:
 
 def test_not_found_errors_are_not_conflict_errors() -> None:
     assert not issubclass(BoatNotFoundError, ConflictError)
-    assert not issubclass(BoatCompanyNotFoundError, ConflictError)
-
-
-def test_boat_not_found_and_company_not_found_have_distinct_codes() -> None:
-    """Both are 404 NotFoundError subclasses, but a missing boat and a
-    missing referenced company are different failures the client needs to
-    tell apart via error.code."""
-    assert BoatNotFoundError("x").code != BoatCompanyNotFoundError("x").code

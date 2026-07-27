@@ -597,9 +597,147 @@ Fish proved the Companies pattern replicates cleanly to a second module. Buildin
 4. **Reuse `authenticatedBackendRequest()` for every BFF route** without exception — no module should re-implement token attachment.
 5. **Run the two-pass QA rhythm** — a production-polish pass (URL state, search/filter UX, table polish, accessibility, performance — fix what's found) followed by a final QA pass before calling a module done (CRUD re-audit, dark mode, responsive, cleanup, documentation) — rather than treating either as optional.
 
+## Boat Module (Sprint 5) — Complete
+
+The third business module — full CRUD (List/Create/Edit/Detail/Delete) against the live backend, `features/boats/` (mirrors `app/modules/boats/` on the backend). Built session-by-session by mirroring the Companies/Fish architecture rather than redesigning anything, per the sprint's explicit brief; this section documents the module as it stands now, not session-by-session. **Status: production-ready for its stated scope** — see "Explicitly out of scope" below for what's deliberately not built.
+
+### Architecture
+
+```
+features/boats/
+  types/boat.ts              # BackendBoat (snake_case, wire shape) + Boat (camelCase, client shape)
+                              # + mapBackendBoat() + BoatCreateRequest/BoatUpdateRequest/BoatListParams
+  services/boat-service.ts   # listBoats / getBoat / createBoat / updateBoat / deleteBoat
+  hooks/                     # useBoats, useBoat, useCreateBoat, useUpdateBoat, useDeleteBoat,
+                              # useBoatFilters (URL state, see below)
+  schemas/
+    boat-filters.ts          # BoatFilters shape + toBoatListParams() mapper
+    boat-form-schema.ts      # zod schema, BoatFormValues, form <-> Boat/request payload mappers
+  constants/                 # boat-status.ts, query-keys.ts (boatKeys)
+  components/                # boat-columns.tsx, boat-row-actions.tsx, boat-form.tsx
+  pages/                     # boat-list-page.tsx, boat-detail-page.tsx, boat-create-page.tsx, boat-edit-page.tsx
+  index.ts                   # barrel — the module's public surface
+```
+
+`app/(authenticated)/boats/{page.tsx, new/page.tsx, [id]/page.tsx, [id]/edit/page.tsx}` are thin route wrappers, same as Companies/Fish. `app/api/boats/{route.ts, [id]/route.ts}` are the BFF proxy routes — GET/POST on the collection route, GET/PUT/DELETE on the `[id]` route, all built on the same `authenticatedBackendRequest()` Companies established rather than re-implementing token attachment.
+
+**Permission model matches Companies, not Fish.** The backend defines four separate codes for boats — `boat:view`, `boat:create`, `boat:edit`, `boat:delete` (`app/modules/boats/permissions.py`) — not Fish's coarser `view`/`manage` split. This was verified by reading the actual permissions module before wiring any UI gate, per the Fish module's own "extension guideline" (don't assume the next module's permission shape by rote).
+
+**No company relationship.** A boat is owned by the tenant only (`tenant_id`) — a `Company` is a customer (the buyer on an invoice), never a boat owner. An earlier build of this module (Sprint 5 Sessions 1–5) incorrectly gave `Boat` a required `company_id` foreign key with a full `AsyncSelect` picker in the form and a resolved name on the Detail page; that was a business-model error, not a UI choice, and was removed wholesale in a dedicated correction — see "Business Model Correction" below for what changed and why. Nothing in the module talks to `features/companies/` anymore.
+
+### Permission Model
+
+- **List** — `boat:create` hides "New Boat" (header action + genuinely-empty-state's CTA); `boat:view`/`boat:edit`/`boat:delete` each independently hide their respective row action, and `boat:view` additionally gates whether a row click navigates at all.
+- **Detail/Create/Edit pages** check their own required permission (`boat:view`/`boat:create`/`boat:edit`) *before* rendering anything else, returning a plain `ErrorState` instead of the page body — hooks are still called unconditionally above that check, per the Rules of Hooks (same pattern as Companies/Fish).
+- **Delete** is gated on `boat:delete` everywhere it appears (List row action, Detail page action).
+
+Cosmetic only, same caveat as Companies/Fish — the backend re-validates every gated route regardless of what the UI hides (`ARCHITECTURE.md` §9.3).
+
+### URL State
+
+Every list control — `search`, `boatType`, `status`, `insuranceExpired`, `licenseExpired`, `page`, `pageSize`, `sort`, `direction` — lives in the URL via `useBoatFilters()` (`features/boats/hooks/use-boat-filters.ts`), built on the same `nuqs` `useQueryStates()` pattern as `useCompanyFilters`/`useFishFilters` — no new solution invented. `history: "push"` (Back/Forward step through prior list states), `shallow: true` (nuqs's default — no server round trip, `useBoats` reacts to the state change and refetches), and a refresh/pasted/shared URL all restore the exact list state. `sort`/`direction` stay two separate, readable URL params; `toBoatListParams()` recombines them into the backend's single combined `-field` string only when calling the API.
+
+`insuranceExpired`/`licenseExpired` are the module's one new parser shape: `parseAsBoolean` with **no** `.withDefault()`, so an absent param resolves to `null` (not present) rather than `false` — a genuine tri-state ("any" / "expired" / "not expired"), matching `BoatFilters.insuranceExpired: boolean | null` and rendered via the shared `BooleanFilter` (`Switch`, on/off only — checked reflects `=== true`, and unchecking always clears back to `null` rather than writing `false`, since "show me boats with valid insurance" isn't a filter this list needs).
+
+`search` and `boatType` are debounced *before* they reach `useBoatFilters` — `SearchBar` debounces internally, and `BoatTypeFilterField` (the direct analog of Fish's `CategoryFilterField`/Companies' `CityFilterField`) does the same for the Boat Type filter, both using `useExternalValueKey()` to remount only on a genuinely external change (Clear All, a removed chip, Back/Forward) rather than on their own debounced write, which would otherwise drop focus mid-keystroke. `status` writes immediately (one click = one deliberate action).
+
+There is no `companyId` list filter — a boat has no company relationship to filter by (see "No company relationship" above).
+
+### Search
+
+`SearchBar` — debounced, clear button, loading slot wired to `listQuery.isFetching`, all inherited from the shared component with no Boat-specific code. A zero-result search shows a description naming the actual term (`No boats match "falcon". Try a different search or clear your filters.`), matching Companies/Fish.
+
+### Filters
+
+`AdvancedFilter` (Popover + active-count badge) holds Status, Boat Type, and the two expiry `BooleanFilter`s — Popover-based rather than an always-expanded panel, so the whole filter row collapses naturally on narrow viewports with no Boat-specific responsive code. `AppliedFilters` renders each active filter (search/status/boat type/insurance/license) as a removable chip with one "Clear All"; the popover's own footer "Clear all" is scoped to while it's open, so there's exactly one Clear-All per visible context, matching Companies/Fish.
+
+### Sorting
+
+Same controlled pattern as Companies/Fish: `filters.sort`/`filters.direction` fully drive the table's `sorting` state, and TanStack's default 3-state toggle (asc → desc → **unsorted**) is intercepted in `onSortingChange` so the "unsorted" step flips direction on the current column instead of clearing it. The "Created At" column carries an explicit `id: "created_at"` distinct from its `accessorKey: "createdAt"` for the same reason as Companies/Fish: without it, a header click would send `sort=createdAt` to a backend that only recognizes snake_case `created_at`/`updated_at`.
+
+### Table Polish
+
+Verified against the shared `DataTable`/`useDataTable` (Sprint 2) with no Boat-specific overrides: sticky header (the component's own default), `stickyActionColumn` (pins the kebab menu), server-side sorting/pagination, and all four Loading/Empty/No-Results/Error states rendered inside `<tbody>` so the header never disappears mid-fetch. Row click navigates to `/boats/{id}` when `boat:view` is held, same gating as the row-level View action.
+
+### Detail Page
+
+`BoatDetailPage` (`components/data-display/{InfoCard,DescriptionList}` + `layout/SectionHeader` + `templates/DetailPageTemplate`, mirroring `CompanyDetailPage`/`FishDetailPage` exactly) renders three cards:
+
+- **Details** — Boat Name, Boat Code, Registration Number, Boat Type, Capacity (`formatQuantity`, NUMERIC(12,3) precision — same formatter Fish uses for its rate fields), Status, Created At, Updated At (`formatDateTime`).
+- **Engine & Compliance** — Engine Number, Engine Power (a plain `Integer` column on the backend, not `Decimal` — shown as a raw `${n} HP` rather than run through a NUMERIC-precision formatter, since there's no decimal precision to preserve), Captain Name, Captain Phone, License Number, License Expiry, Insurance Expiry (`formatDate` — calendar dates, not `formatDateTime`, since the backend stores them as `Date` not `Timestamp`).
+- **Notes** — free text, or the shared `EmptyState` ("No notes added") when blank, matching Companies'/Fish's own Notes/Description card.
+
+Status badges reuse the same `Badge` + `BOAT_STATUS_BADGE_VARIANT` pair the List page's Status column uses — one source of truth for the color mapping, never redefined per page.
+
+### CRUD Flow
+
+```
+List (search/filter/sort/paginate)
+  ├─ row action / row click "View" ──────────▶ Detail (read-only)
+  ├─ row action "Edit" ───────────────────────▶ Edit (BoatForm, pre-filled)
+  ├─ row action "Delete" ─────────────────────▶ DeleteConfirmationDialog ──▶ useDeleteBoat()
+  └─ primary action "New Boat" ────────────────▶ Create (BoatForm, empty)
+
+Detail
+  ├─ primary action "Edit" ───────────────────▶ Edit
+  └─ secondary action "Delete" ────────────────▶ DeleteConfirmationDialog ──▶ useDeleteBoat()
+```
+
+`BoatForm` is the single shared form for both Create and Edit — Boat Name, Boat Code, Registration Number, Boat Type, Capacity, Status, Engine Number, Engine Power, Captain Name, Captain Phone, License Number/Expiry, Insurance Expiry, Description — grouped into `FormSection`s ("Boat Details", "Engine & Crew", "Compliance", "Description") over `FormGrid`, the same layout primitives Companies/Fish use (see "Production Polish" below for why this wasn't true until Session 4). Validation mirrors the backend's own checks (phone 7–15 digits, capacity to 3 decimals, engine power a non-negative integer) and the same submit/error handling (422 → `mapServerErrorsToForm`, anything else → `toastError`) as `CompanyForm`/`FishForm`. `useCreateBoat`/`useUpdateBoat`/`useDeleteBoat` invalidate `boatKeys.lists()` on success (`useUpdateBoat` also invalidates `boatKeys.detail(id)`, `useDeleteBoat` removes it outright); `useDeleteBoat` owns the entire delete outcome (invalidate, `toastSuccess`, navigate to `/boats`) so the Detail page's Delete button and the List page's row-action Delete behave identically. The List page's stale-page-after-delete correction (page rewinds if it points past the new last page once a fetch confirms it) is inherited verbatim from the Companies/Fish pattern.
+
+Every action is permission-gated — see "Permission Model" above.
+
+**Explicitly out of scope** (per the Sprint 5 brief, through Session 4): Activity Timeline, Audit History, Attachments, Export, PDF. None of these are wired to the Boat module.
+
+### Production Polish (Sprint 5 Session 4)
+
+A review pass over the whole module against the same checklist the Companies/Fish polish passes used (URL state, search/filter UX, table polish, detail page formatting, responsive layout, accessibility, performance) — fix only what's found, no new CRUD scope. Unlike Fish (which mirrored an already-hardened Companies build closely enough to need only two small fixes), this pass found a genuine structural gap in the form:
+
+- **`BoatForm` didn't use the shared `FormSection`/`FormGrid` layout primitives.** It was built with raw `<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">` markup instead — a different collapse breakpoint (`sm:` vs. `FormGrid`'s `md:`, meaning tablet-portrait users got squeezed into two columns where every other form in the app stays single-column), different spacing tokens (`gap-4` vs. `FormGrid`'s `gap-x-4 gap-y-5`), and no section grouping (`CompanyForm`/`FishForm` both divide their fields into titled `FormSection`s; the Boat form was one flat block). Rebuilt using `FormSection` + `FormGrid`, split into "Boat Details" / "Engine & Crew" / "Compliance" / "Description" — now byte-for-byte consistent with how Companies/Fish compose the same primitives.
+- **Unformatted capacity in the List table** — `boat-columns.tsx`'s Capacity column rendered the raw wire string (`"12000.000"`) instead of `formatQuantity()` (`utils/format-number.ts`, NUMERIC(12,3) precision), the same formatter the Detail page already used correctly. Fixed, so List and Detail now agree on presentation.
+- **Unmemoized option-list mapping** — `BoatForm`'s `company_id` `AsyncSelect` options array was rebuilt via a fresh `.map()`/`.unshift()` on every render regardless of whether the underlying query data had changed. Wrapped in `useMemo`, keyed on the two query results. *(The `company_id` field itself, and this whole option-list mechanism, was removed in Session 6 — see "Business Model Correction" below. Kept here as an accurate record of what this session actually did.)*
+- **Verified clean, no changes needed:** all 9 URL params (`search`/`boatType`/`status`/`insuranceExpired`/`licenseExpired`/`page`/`pageSize`/`sort`/`direction`) already synced correctly, including the two boolean tri-state params; no hardcoded colors/hex values in `features/boats/` (grepped); every spinner already carries `motion-reduce:animate-none`; dialogs (`DeleteConfirmationDialog`)/dropdowns (row actions)/comboboxes (`AsyncSelect`/`SearchableSelect`) all inherit Radix's focus trap and keyboard support unchanged; `DataTableRowActions` already stops row-click propagation so opening the kebab menu never also navigates; responsive collapsing (table horizontal scroll, detail cards to single column, filter popover collapse) all inherited correctly from the unmodified Sprint 2 component library — the Detail page and List page never override a breakpoint themselves, only the Form did (fixed above).
+- **Not done:** no live browser/screen-reader session was run for this pass, same caveat as the Companies/Fish polish passes — findings came from static code review of every file in `features/boats/` plus its call sites, not fresh empirical testing of every breakpoint/theme combination.
+
+### Final QA Pass (Sprint 5 Session 5)
+
+The closing hardening pass, mirroring the Companies/Fish modules' own Session 5 process exactly — a full CRUD/permissions/responsive/dark-mode/accessibility/performance/cleanup review with a directive to fix only what's found, not add scope, and to mark the module complete once satisfied.
+
+- **CRUD audit** — re-verified List, View, Create, Edit, Delete, permissions, search, filters, sorting, pagination, URL state, and all four Loading/Error/Empty/No-Results states. All correct; no code changes required beyond the two stale comments below.
+- **Two stale comments** — `boat-service.ts`'s doc comment still read "Sprint 5 Session 1 built list/get; Session 2 adds create/update... **Delete is still out of scope**," which had gone factually wrong the moment `deleteBoat()` was added in Session 3 (the comment sat directly above the method it contradicted). `boat-list-page.tsx`'s doc comment similarly read "Sprint 5 Session 3 completes the CRUD workflow," a session-relative description of what changed rather than a plain statement of current behavior — the same class of staleness the Fish module's own Session 5 pass fixed in `fish-form-schema.ts`. Both reworded to state the current facts plainly, with no reference to which session added them.
+- **Dark mode** — re-confirmed via grep across all of `features/boats/`: zero hardcoded colors (`text-gray-*`, `bg-white`, hex/`rgb()`/`hsl()` literals), no `console.log`/`TODO`/`FIXME` left behind either. Every visual treatment (Badge variants, borders, muted text) comes from the same semantic Tailwind tokens the rest of the app themes off, same as Companies/Fish.
+- **Responsive** — re-checked Desktop/Laptop/Tablet/Mobile breakpoints across List (table horizontal scroll + toolbar wrap), Detail (two-column info cards collapsing to one), and Form (`FormGrid` two-column collapsing to one, fixed in Session 4) — all inherited unmodified from the Sprint 2 component library.
+- **Accessibility** — re-verified keyboard navigation, focus order, `aria-invalid`/`aria-describedby` wiring on every form field (including the `AsyncSelect`/`SearchableSelect`-based Company/Status fields, which get both from `FormField`'s render props same as a plain `Input`), dialog focus trap (inherited from Radix `AlertDialog`), and reduced motion (`motion-reduce:animate-none` present on every spinner). No gaps found.
+- **Performance** — re-checked React Query usage (`keepPreviousData` on the list query, `enabled: Boolean(id)` gating the detail/company queries, correct `boatKeys.lists()`/`boatKeys.detail(id)` invalidation on every mutation), memoization (columns/row-actions/sorting/company-options all stable via `useMemo`/`useCallback`, the last one fixed in Session 4), and found no further duplicate renders or duplicate helpers.
+- **Code cleanup** — no unused imports, no dead code, no duplicate constants/mappings found (grepped and manually traced every export in the module's barrel back to a real call site — `index.ts` was already complete, unlike Fish's own Session 4 barrel gap). Two stale comments fixed (above); nothing else warranted a change.
+
+**Boat module marked complete** — full CRUD against the live backend, URL-synced list state (9 params, including two genuinely tri-state booleans), and two rounds of hardening (production polish + final QA), matching the Companies/Fish modules' own bar for "production-ready for its stated scope." *(This session's build still had the `company_id` foreign key to `companies` described in Sessions 1–5 above — a business-model error, corrected in Session 6; see "Business Model Correction" below.)*
+
+### Business Model Correction (Sprint 5 Session 6)
+
+A dedicated domain-model fix, not a feature session — `Boat` had a required `company_id` foreign key to `companies` from the module's very first session onward (see the now-removed "Company Relationship" section that used to sit above, and the annotations left in the Sessions 4/5 notes above for the historical record). That was wrong: per `ARCHITECTURE.md`'s own Context section and Business Model, a `Company` is a **customer** — the buyer on an invoice — never a boat owner. The correct flow is `Tenant → Boats → Trips → Trip Catch → Invoice → Company (customer) → Payment`; purchasing stays `Supplier → Purchase Bill → Supplier Payment`, entirely unrelated to boats. A boat is owned by `tenant_id` alone.
+
+**What was removed, end to end:**
+
+- **Backend** — `boats.company_id` column, its FK/index, `Boat.company` / `Company.boats` relationships, `BoatService._ensure_company_exists()` (and its `CompanyService` cross-module dependency), `BoatCompanyNotFoundError`, every `company_id` reference in the boat schemas/repository/router (request/response bodies, list filter, OpenAPI examples/descriptions). A new Alembic migration (`e2b8f4a91c6d_drop_boats_company_id`) drops the column/FK/index non-destructively — every other boat column and row is untouched (verified live: 11 pre-existing boat rows survived the upgrade with the column gone, and the downgrade path was also verified to restore it). Every backend test that built a boat fixture (unit, integration, and the cross-module ones in the trip/invoice/payment test suites that provision a boat as a prerequisite) had its `company_id` argument/fixture stripped — `company_id` remains everywhere it's legitimately used for `Invoice`/`Payment`'s real customer relationship, untouched.
+- **Frontend** — `Boat`/`BackendBoat`/`BoatCreateRequest`/`BoatUpdateRequest`/`BoatListParams` all lost `company_id`/`companyId`. `BoatForm` lost its entire "Owning Company" `AsyncSelect` field, the two `companyService`/`useQuery` lookups backing it (search + id-scoped resolve), the merged/memoized options list, and the `companyService` import outright — the form is back to a single `FormSection`/`FormGrid` shape with no cross-feature dependency. `BoatDetailPage` lost its "Company" row and `useCompany(boat.companyId)` lookup. `boat-service.ts` lost the `company_id` query-string param. No Boat file imports anything from `features/companies/` anymore.
+- **Documentation** — `ARCHITECTURE.md` §5.2's `boats` table sketch (which had specified `owner_company_id FK companies NULL` from the start — the origin of the mistake) now carries an "As built" note stating the corrected ownership model and the real implemented column set. This README's Boat Module section (above) was edited in place for every claim that described *current* architecture (Architecture, Detail Page, CRUD Flow, URL State, Extension Guidelines); the Sessions 4/5 sections were left as historical record of what was actually built then, with inline annotations pointing here rather than being rewritten.
+
+**Verification:** full backend suite (2445 tests), `ruff`, `mypy --strict` all clean; frontend `lint`/`type-check`/`build` all clean. No compatibility shim, no deprecated-but-kept field, no TODO — the relationship is gone, not hidden.
+
+### Extension Guidelines (for the next module)
+
+For the next module (Trips, per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencing — which references both `boats` and `companies` for real, legitimate reasons: a trip has a `boat_id`, and its catch is eventually sold to a `Company` via an invoice):
+
+1. **Copy the folder structure verbatim**, same as Fish's own guideline — `types/`, `services/`, `hooks/`, `schemas/`, `constants/`, `components/`, `pages/`, `index.ts`.
+2. **Check the backend's actual permission codes first** — don't assume either the Companies four-code shape or the Fish two-code shape; Boats happened to match Companies, but that was verified, not assumed.
+3. **Verify a cross-feature foreign key against the actual business model before building it** — this module's biggest lesson, and the reason Session 6 exists at all. A field compiling, validating, and rendering correctly proves nothing about whether the relationship it encodes is real; `ARCHITECTURE.md`'s Business Model section is the source of truth for who owns what, and it should have been checked before `company_id` was ever added to the `Boat` schema. When a cross-feature reference *is* legitimate (e.g. Trip → Boat, Invoice → Company), import the other feature's service/hook directly (`companyService`, `useCompany`) rather than duplicating a lookup — there's no shared "entity selector registry" in this codebase.
+4. **Always build forms out of `FormSection`/`FormGrid`, never a raw grid `div`** — Session 4's finding, still valid. The visual result of a raw grid can look identical at a glance; check new form components against `CompanyForm`/`FishForm` specifically, not just "does it look like a form."
+5. **Run the same two-pass QA rhythm** — production-polish pass followed by a Final QA pass before calling a module done — rather than treating either as optional or conflating them. Neither pass caught the `company_id` design error, because both were scoped to *how the module was built*, not *whether the schema it was built against was correct* — a reminder that QA checklists catch execution bugs, not requirements bugs. When in doubt about a schema decision, check the architecture doc, not just the code that already implements it.
+
 ## Current Status
 
-**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and a finalization pass. **Sprint 3 (Sessions 1–5) — complete** — the Companies module: full CRUD (List/Create/Edit/Detail/Delete) against the live backend, URL-synced list state, UX polish, and a final QA/hardening pass — see "Companies Module" above. **Sprint 4 (Sessions 1–5) — complete** — the Fish module: full CRUD built by deliberately mirroring the Companies architecture, URL-synced list state, a production-polish pass, and a final QA/hardening pass — see "Fish Module" above. The Companies module proved the reusable library out end-to-end; Fish proves the *pattern itself* replicates cleanly to a second module with a different (coarser) permission model and no dedicated "status" column.
+**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and a finalization pass. **Sprint 3 (Sessions 1–5) — complete** — the Companies module: full CRUD (List/Create/Edit/Detail/Delete) against the live backend, URL-synced list state, UX polish, and a final QA/hardening pass — see "Companies Module" above. **Sprint 4 (Sessions 1–5) — complete** — the Fish module: full CRUD built by deliberately mirroring the Companies architecture, URL-synced list state, a production-polish pass, and a final QA/hardening pass — see "Fish Module" above. **Sprint 5 (Sessions 1–6) — complete** — the Boat module: full CRUD, URL-synced list state, a production-polish pass, a final QA/hardening pass, and a Session 6 business-model correction (removed an incorrectly-added `company_id` boat-ownership field — a boat belongs to the tenant only) — see "Boat Module" above. The Companies module proved the reusable library out end-to-end; Fish proved the *pattern itself* replicates to a second module with a different (coarser) permission model; Boats proved that even a completed, QA-passed module can carry a business-model defect that only a domain-level review catches, not a code-level one.
 
 - Project scaffold, TypeScript strict mode, ESLint, Tailwind v4.
 - shadcn/ui configured (New York style, Slate base color, CSS variables).
@@ -619,5 +757,6 @@ Fish proved the Companies pattern replicates cleanly to a second module. Buildin
 - Sprint 2 Session 5's component library finalization pass — consistency/accessibility/dark-mode/documentation audit across all of the above — see above.
 - The Companies module (`src/features/companies/`) — see "Companies Module" above. `nuqs` added as a dependency in Sprint 3 Session 4 for URL-synced list state.
 - The Fish module (`src/features/fish/`) — see "Fish Module" above. No new dependencies; proves the Companies pattern replicates to a module with a coarser (`view`/`manage`) permission model and no dedicated `status` column.
+- The Boat module (`src/features/boats/`) — see "Boat Module" above. No new dependencies; proves the pattern extends to a module with a genuinely tri-state boolean filter (`insuranceExpired`/`licenseExpired`). Two rounds of hardening (production polish + final QA) complete, same bar as Companies/Fish, plus a Session 6 business-model correction that removed an incorrect `company_id` foreign key added in Sessions 1–5 — a boat is owned by the tenant only, never by a `Company` (a customer) — see "Business Model Correction" above.
 
-Next up: the next Masters module per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencing (Boats, Trips, ...), following the same pattern the Companies and Fish modules now establish.
+Next up: the next Masters module per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencing (Trips, ...), following the same pattern the Companies, Fish, and Boat modules now establish.

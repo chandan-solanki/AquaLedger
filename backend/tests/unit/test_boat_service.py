@@ -2,18 +2,14 @@ import uuid
 from datetime import UTC, date, datetime
 from typing import Any
 
-import pytest
-
 from app.core.errors import ConflictError
 from app.modules.boats.exceptions import (
-    BoatCompanyNotFoundError,
     DuplicateBoatCodeError,
     DuplicateBoatRegistrationNumberError,
 )
 from app.modules.boats.models import Boat
 from app.modules.boats.schemas import BoatListParams
 from app.modules.boats.service import BoatService
-from app.modules.companies.exceptions import CompanyNotFoundError
 
 
 class _FakeConstraintCause(Exception):
@@ -52,21 +48,6 @@ class _FakeRepo:
         return self.rows, self.total
 
 
-class _FakeCompanyService:
-    """Stands in for CompanyService.get - either returns a stub or raises,
-    matching the two branches BoatService._ensure_company_exists handles."""
-
-    def __init__(self, *, raises: bool = False) -> None:
-        self.raises = raises
-        self.calls: list[tuple[uuid.UUID, uuid.UUID]] = []
-
-    async def get(self, company_id: uuid.UUID, *, tenant_id: uuid.UUID) -> object:
-        self.calls.append((company_id, tenant_id))
-        if self.raises:
-            raise CompanyNotFoundError("Company not found")
-        return object()
-
-
 def _make_boat(**overrides: Any) -> Boat:
     """A Boat that satisfies BoatResponse validation without touching the DB -
     the non-nullable columns normally filled by server_default / TimestampMixin
@@ -75,7 +56,6 @@ def _make_boat(**overrides: Any) -> Boat:
     defaults: dict[str, Any] = {
         "id": uuid.uuid4(),
         "tenant_id": uuid.uuid4(),
-        "company_id": uuid.uuid4(),
         "code": "B-1",
         "name": "Test Boat",
         "registration_number": "REG-1",
@@ -87,15 +67,11 @@ def _make_boat(**overrides: Any) -> Boat:
     return Boat(**defaults)
 
 
-def _service_with_fakes(
-    rows: list[Boat], total: int, *, company_raises: bool = False
-) -> tuple[BoatService, _FakeRepo, _FakeCompanyService]:
+def _service_with_fakes(rows: list[Boat], total: int) -> tuple[BoatService, _FakeRepo]:
     service = BoatService.__new__(BoatService)
     fake_repo = _FakeRepo(rows, total)
-    fake_company_service = _FakeCompanyService(raises=company_raises)
     service._repo = fake_repo  # type: ignore[assignment]
-    service._company_service = fake_company_service  # type: ignore[assignment]
-    return service, fake_repo, fake_company_service
+    return service, fake_repo
 
 
 class TestTranslateIntegrityError:
@@ -122,27 +98,10 @@ class TestTranslateIntegrityError:
         assert type(result) is ConflictError
 
 
-class TestEnsureCompanyExists:
-    async def test_passes_through_when_company_exists(self) -> None:
-        service, _, fake_company_service = _service_with_fakes([], total=0, company_raises=False)
-        company_id = uuid.uuid4()
-        tenant_id = uuid.uuid4()
-
-        await service._ensure_company_exists(company_id, tenant_id)
-
-        assert fake_company_service.calls == [(company_id, tenant_id)]
-
-    async def test_translates_company_not_found_to_boat_company_not_found(self) -> None:
-        service, _, _ = _service_with_fakes([], total=0, company_raises=True)
-
-        with pytest.raises(BoatCompanyNotFoundError):
-            await service._ensure_company_exists(uuid.uuid4(), uuid.uuid4())
-
-
 class TestListBoatsPaginationMath:
     async def test_first_page_of_several(self) -> None:
         rows = [_make_boat() for _ in range(2)]
-        service, fake_repo, _ = _service_with_fakes(rows, total=5)
+        service, fake_repo = _service_with_fakes(rows, total=5)
 
         result = await service.list_boats(
             tenant_id=uuid.uuid4(), params=BoatListParams(page=1, page_size=2)
@@ -158,7 +117,7 @@ class TestListBoatsPaginationMath:
 
     async def test_last_page_has_no_next(self) -> None:
         rows = [_make_boat()]
-        service, _, _ = _service_with_fakes(rows, total=5)
+        service, _ = _service_with_fakes(rows, total=5)
 
         result = await service.list_boats(
             tenant_id=uuid.uuid4(), params=BoatListParams(page=3, page_size=2)
@@ -168,7 +127,7 @@ class TestListBoatsPaginationMath:
         assert result.meta.has_previous is True
 
     async def test_empty_result_gives_zero_pages(self) -> None:
-        service, _, _ = _service_with_fakes([], total=0)
+        service, _ = _service_with_fakes([], total=0)
 
         result = await service.list_boats(
             tenant_id=uuid.uuid4(), params=BoatListParams(page=1, page_size=20)
@@ -181,16 +140,14 @@ class TestListBoatsPaginationMath:
         assert result.meta.has_previous is False
 
     async def test_filters_are_forwarded_to_the_repository(self) -> None:
-        service, fake_repo, _ = _service_with_fakes([], total=0)
+        service, fake_repo = _service_with_fakes([], total=0)
         tenant_id = uuid.uuid4()
-        company_id = uuid.uuid4()
 
         await service.list_boats(
             tenant_id=tenant_id,
             params=BoatListParams(
                 q="falcon",
                 boat_type="trawler",
-                company_id=company_id,
                 is_active=True,
                 insurance_expired=False,
                 license_expired=True,
@@ -204,7 +161,6 @@ class TestListBoatsPaginationMath:
             "tenant_id": tenant_id,
             "q": "falcon",
             "boat_type": "trawler",
-            "company_id": company_id,
             "is_active": True,
             "insurance_expired": False,
             "license_expired": True,

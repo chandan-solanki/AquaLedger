@@ -36,7 +36,6 @@ class BoatRepository:
         *,
         q: str | None,
         boat_type: str | None,
-        company_id: uuid.UUID | None,
         is_active: bool | None,
         insurance_expired: bool | None,
         license_expired: bool | None,
@@ -56,8 +55,6 @@ class BoatRepository:
         conditions = [Boat.tenant_id == tenant_id, Boat.deleted_at.is_(None)]
         if boat_type and boat_type.strip():
             conditions.append(func.lower(Boat.boat_type) == boat_type.strip().lower())
-        if company_id is not None:
-            conditions.append(Boat.company_id == company_id)
         if is_active is not None:
             conditions.append(Boat.is_active == is_active)
         if insurance_expired is not None:

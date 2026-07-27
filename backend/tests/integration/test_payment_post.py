@@ -101,12 +101,9 @@ async def company_id(db_session: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUI
     return company.id
 
 
-async def _make_boat(
-    db_session: AsyncSession, tenant_id: uuid.UUID, company_id: uuid.UUID, **overrides: Any
-) -> Boat:
+async def _make_boat(db_session: AsyncSession, tenant_id: uuid.UUID, **overrides: Any) -> Boat:
     defaults: dict[str, Any] = {
         "tenant_id": tenant_id,
-        "company_id": company_id,
         "code": f"B-{uuid.uuid4().hex[:8]}",
         "name": f"Boat {uuid.uuid4().hex[:8]}",
         "registration_number": f"REG-{uuid.uuid4().hex[:8]}",
@@ -185,7 +182,7 @@ async def _issued_invoice(
     """A fully issued invoice with a known balance_amount (quantity x rate,
     no tax/discount) - the default 10 x 100 = 1000.00, provisioning its own
     boat/trip/fish/trip-catch chain."""
-    boat = await _make_boat(db_session, tenant_id, company_id)
+    boat = await _make_boat(db_session, tenant_id)
     trip = await _make_trip(db_session, tenant_id, boat.id)
     fish = await _make_fish(db_session, tenant_id)
     trip_catch = await _make_trip_catch(db_session, tenant_id, trip.id, fish.id)

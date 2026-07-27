@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
 from app.modules.boats.exceptions import (
-    BoatCompanyNotFoundError,
     BoatNotFoundError,
     DuplicateBoatCodeError,
     DuplicateBoatRegistrationNumberError,
@@ -21,26 +20,18 @@ from app.modules.boats.schemas import (
     BoatResponse,
     BoatUpdateRequest,
 )
-from app.modules.companies.exceptions import CompanyNotFoundError
-from app.modules.companies.service import CompanyService
 
 
 class BoatService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._repo = BoatRepository(session)
-        # Cross-module reference validation goes through the other module's
-        # service, never its repository (ARCHITECTURE.md §2 - modules talk
-        # to each other only through service.py).
-        self._company_service = CompanyService(session)
 
     async def create(
         self, payload: BoatCreateRequest, *, tenant_id: uuid.UUID, actor_id: uuid.UUID
     ) -> BoatResponse:
-        await self._ensure_company_exists(payload.company_id, tenant_id)
         boat = Boat(
             tenant_id=tenant_id,
-            company_id=payload.company_id,
             code=payload.code,
             name=payload.name,
             registration_number=payload.registration_number,
@@ -74,7 +65,6 @@ class BoatService:
             tenant_id,
             q=params.q,
             boat_type=params.boat_type,
-            company_id=params.company_id,
             is_active=params.is_active,
             insurance_expired=params.insurance_expired,
             license_expired=params.license_expired,
@@ -103,8 +93,6 @@ class BoatService:
     ) -> BoatResponse:
         boat = await self._get_or_raise(boat_id, tenant_id)
         update_data = payload.model_dump(exclude_unset=True)
-        if "company_id" in update_data:
-            await self._ensure_company_exists(update_data["company_id"], tenant_id)
         for field, value in update_data.items():
             setattr(boat, field, value)
         boat.updated_by = actor_id
@@ -124,12 +112,6 @@ class BoatService:
         """Boat ids whose name contains `q` (case-insensitive), for the
         trips module's boat-name search - see BoatRepository.find_ids_by_name."""
         return await self._repo.find_ids_by_name(tenant_id, f"%{q.strip()}%")
-
-    async def _ensure_company_exists(self, company_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
-        try:
-            await self._company_service.get(company_id, tenant_id=tenant_id)
-        except CompanyNotFoundError as exc:
-            raise BoatCompanyNotFoundError("The specified company does not exist") from exc
 
     async def _get_or_raise(self, boat_id: uuid.UUID, tenant_id: uuid.UUID) -> Boat:
         boat = await self._repo.get_by_id(boat_id, tenant_id)
