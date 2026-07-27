@@ -160,9 +160,7 @@ export function FishForm({ defaultValues, onSubmit, onCancel, submitLabel = "Sav
         </FormGrid>
       </FormSection>
 
-      <FormSection title="Description">
-        <TextArea label="Description" error={errors.description?.message} {...register("description")} />
-      </FormSection>
+      <TextArea label="Description" error={errors.description?.message} {...register("description")} />
 
       <FormActions
         secondary={

@@ -139,7 +139,7 @@ export function DataTable<TData>({
           role="table"
           aria-label={ariaLabel}
           className="w-full border-collapse text-sm"
-          style={{ width: table.getTotalSize() }}
+          style={{ minWidth: table.getTotalSize() }}
         >
           {caption && <caption className="sr-only">{caption}</caption>}
 

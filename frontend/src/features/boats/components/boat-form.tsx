@@ -205,9 +205,7 @@ export function BoatForm({ defaultValues, onSubmit, onCancel, submitLabel = "Sav
         </FormGrid>
       </FormSection>
 
-      <FormSection title="Description">
-        <TextArea label="Description" error={errors.notes?.message} {...register("notes")} />
-      </FormSection>
+      <TextArea label="Description" error={errors.notes?.message} {...register("notes")} />
 
       <FormActions
         secondary={

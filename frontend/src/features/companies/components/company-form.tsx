@@ -150,9 +150,7 @@ export function CompanyForm({ defaultValues, onSubmit, onCancel, submitLabel = "
         </FormGrid>
       </FormSection>
 
-      <FormSection title="Notes">
-        <TextArea label="Notes" error={errors.notes?.message} {...register("notes")} />
-      </FormSection>
+      <TextArea label="Notes" error={errors.notes?.message} {...register("notes")} />
 
       <FormActions
         secondary={
