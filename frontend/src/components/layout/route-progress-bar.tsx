@@ -8,6 +8,17 @@ const AUTO_TICK_MS = 120;
 const AUTO_TICK_STEP = 0.3;
 const COMPLETE_HOLD_MS = 100;
 const TRANSITION_MS = 150;
+// A genuine navigation never takes this long. Back/Forward can resolve
+// straight from Next's own client-side router cache fast enough that the
+// route change lands before `begin()` (below) even runs - `popstate` and
+// Next's own popstate handling both fire on the same event, and there is
+// no guaranteed ordering between them. When that happens, `pathname`/
+// `searchParams` have already finished changing by the time this
+// component shows the bar, so the completion effect (which only reacts to
+// a *subsequent* change) never fires again - without this safety net the
+// bar is left visually parked at ~90% forever. This unconditionally
+// forces it closed instead.
+const MAX_VISIBLE_MS = 2000;
 
 /**
  * A thin top-of-viewport progress bar shown for genuine route changes —
@@ -44,6 +55,20 @@ const TRANSITION_MS = 150;
  * Completion is still simply "the route Next resolved to actually changed":
  * `usePathname()`/`useSearchParams()` updating is what snaps the bar to
  * 100% and fades it out.
+ *
+ * **The `MAX_VISIBLE_MS` safety net** (see above) exists because that
+ * completion signal isn't guaranteed to arrive *after* the bar is shown.
+ * Bug fixed: Back/Forward through pages already in Next's client-side
+ * router cache (the common case - e.g. Cancel/Save on a Create/Edit form
+ * navigating back to that module's List) can resolve fast enough that
+ * `pathname`/`searchParams` finish changing before this component's
+ * `popstate` handler (`begin()`) even runs, since there's no ordering
+ * guarantee between it and Next's own `popstate` listener on the same
+ * event. When that happens, the completion effect fires while `visible`
+ * is still `false` (a no-op), and then `begin()` shows the bar for a
+ * change that already happened - nothing will ever change `pathname`
+ * again to trigger completion, so without this timeout the bar sat
+ * visually parked at ~90% (the asymptotic auto-tick ceiling) forever.
  */
 export function RouteProgressBar() {
   const router = useRouter();
@@ -52,10 +77,31 @@ export function RouteProgressBar() {
   const [progress, setProgress] = useState(0);
   const [visible, setVisible] = useState(false);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const safetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    function clearTimers() {
+      if (tickRef.current) {
+        clearInterval(tickRef.current);
+        tickRef.current = null;
+      }
+      if (safetyRef.current) {
+        clearTimeout(safetyRef.current);
+        safetyRef.current = null;
+      }
+    }
+
+    function complete() {
+      clearTimers();
+      setProgress(100);
+      setTimeout(() => {
+        setVisible(false);
+        setProgress(0);
+      }, COMPLETE_HOLD_MS);
+    }
+
     function begin() {
-      if (tickRef.current) clearInterval(tickRef.current);
+      clearTimers();
       setVisible(true);
       setProgress(15);
       tickRef.current = setInterval(() => {
@@ -63,6 +109,7 @@ export function RouteProgressBar() {
           current >= MAX_AUTO_PROGRESS ? current : current + (MAX_AUTO_PROGRESS - current) * AUTO_TICK_STEP
         );
       }, AUTO_TICK_MS);
+      safetyRef.current = setTimeout(complete, MAX_VISIBLE_MS);
     }
 
     const originalPush = router.push.bind(router);
@@ -83,17 +130,22 @@ export function RouteProgressBar() {
       router.push = originalPush;
       router.replace = originalReplace;
       window.removeEventListener("popstate", begin);
-      if (tickRef.current) clearInterval(tickRef.current);
+      clearTimers();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Runs whenever the resolved route actually changes - the completion
-  // signal for whatever navigation was in flight.
+  // signal for whatever navigation was in flight. `MAX_VISIBLE_MS` above
+  // is the backstop for when this never fires at all.
   useEffect(() => {
     if (tickRef.current) {
       clearInterval(tickRef.current);
       tickRef.current = null;
+    }
+    if (safetyRef.current) {
+      clearTimeout(safetyRef.current);
+      safetyRef.current = null;
     }
     if (!visible) return;
     setProgress(100);

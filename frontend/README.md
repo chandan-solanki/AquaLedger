@@ -735,9 +735,190 @@ For the next module (Trips, per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencin
 4. **Always build forms out of `FormSection`/`FormGrid`, never a raw grid `div`** — Session 4's finding, still valid. The visual result of a raw grid can look identical at a glance; check new form components against `CompanyForm`/`FishForm` specifically, not just "does it look like a form."
 5. **Run the same two-pass QA rhythm** — production-polish pass followed by a Final QA pass before calling a module done — rather than treating either as optional or conflating them. Neither pass caught the `company_id` design error, because both were scoped to *how the module was built*, not *whether the schema it was built against was correct* — a reminder that QA checklists catch execution bugs, not requirements bugs. When in doubt about a schema decision, check the architecture doc, not just the code that already implements it.
 
+## Payment Module (Sprint 8) — Complete
+
+The Customer Payments module — full lifecycle (List/Create/Edit/Detail/Allocate/Post/Delete) against the live backend, `features/payments/` (mirrors `app/modules/payments/` on the backend). Built across five sessions (List foundation; Create/Edit; Detail + Allocation CRUD; Post + Delete; a final QA/hardening pass); this section documents the module as it stands now, not session-by-session. **Status: production-ready for its stated scope** — see "Known Backend Limitations" below for what the backend itself doesn't support yet.
+
+Unlike Companies/Fish/Boats, a Payment is not a flat master-data record: it has a real state machine (`draft → posted`, with an unreachable `cancelled` value reserved in the enum) and a child sub-resource (allocations against Invoices) whose own mutations cascade into two other modules' data (Invoice, Company). This module is the first to combine List/CRUD, a state-machine lifecycle, and a nested sub-resource with cross-module cascading invalidation in one place.
+
+### Architecture
+
+```
+features/payments/
+  types/
+    payment.ts                # BackendPayment (snake_case) + Payment (camelCase) + mapBackendPayment()
+                               # + PaymentCreateRequest/PaymentUpdateRequest/PaymentListParams
+    payment-allocation.ts     # BackendPaymentAllocation + PaymentAllocation + mapBackendPaymentAllocation()
+                               # + PaymentAllocationCreateRequest/PaymentAllocationUpdateRequest
+  services/
+    payment-service.ts            # listPayments/getPayment/createPayment/updatePayment/deletePayment/postPayment
+    payment-allocation-service.ts # listPaymentAllocations/createPaymentAllocation/updatePaymentAllocation/deletePaymentAllocation
+  hooks/                     # usePayments, usePayment, usePaymentFilters (URL state),
+                              # useCreatePayment, useUpdatePayment, useDeletePayment, usePostPayment,
+                              # usePaymentAllocations, usePaymentAllocation, useCreatePaymentAllocation,
+                              # useUpdatePaymentAllocation, useDeletePaymentAllocation, useCompanyOptions
+  schemas/
+    payment-filters.ts        # PaymentFilters shape + toPaymentListParams() mapper
+    payment-form-schema.ts    # zod schema, PaymentFormValues, form <-> Payment/request payload mappers
+                               # (the allocation form's own tiny 2-field zod schema is colocated in
+                               # its component instead — see "Payment Allocation" below)
+  constants/                  # payment-status.ts, payment-method.ts, query-keys.ts (paymentKeys, paymentAllocationKeys)
+  components/                 # payment-columns.tsx, payment-row-actions.tsx, payment-form.tsx,
+                               # payment-allocation-columns.tsx, payment-allocation-row-actions.tsx,
+                               # payment-allocation-form.tsx, payment-allocation-table.tsx
+  pages/                      # payment-list-page.tsx, payment-detail-page.tsx,
+                               # payment-create-page.tsx, payment-edit-page.tsx
+  index.ts                    # barrel — the module's public surface
+```
+
+`app/(authenticated)/payments/{page.tsx, new/page.tsx, [id]/page.tsx, [id]/edit/page.tsx}` are thin, server-rendered route wrappers — no `"use client"`, no logic — that just render the matching `features/payments/pages/*` component, same as every prior module.
+
+**No Payment Number field anywhere in a form.** `payment_number` is assigned only at Post (a locked, per-tenant/fiscal-year sequence) — never client-supplied, never present in `PaymentCreateRequest`/`PaymentUpdateRequest`. Same for `allocated_amount`/`unallocated_amount`/`status`: all four are server-owned from creation through posting, and `PaymentForm` exposes none of them.
+
+**`PaymentResponse`/`PaymentAllocationResponse` carry only foreign-key ids, never nested objects** — `company_id` on a payment, `invoice_id` on an allocation. Both are resolved to display data client-side through the *owning* feature's own public API (`useCompanyOptions()` inside `features/payments/`, `invoiceService`/`invoiceKeys` from `features/invoices` for allocations) rather than a server-side join — the same pattern Invoices already established for its own `company_id`.
+
+### Permission Model
+
+Five permission codes gate the module, read via `usePermissions()` — the same `resource:action` codes the backend's RBAC model defines (`app/modules/payments/permissions.py`), with no separate `payment_allocation:*` set: allocation endpoints reuse the payment codes.
+
+| Code | Gates |
+|---|---|
+| `payment:view` | Reaching the List/Detail pages; the row-level View action; whether a List row click navigates. |
+| `payment:create` | "New Payment" (header + empty-state CTA); the Detail page's "Add Allocation" button. |
+| `payment:edit` | Row/Detail-page Edit action; the Allocations table's Edit row action. |
+| `payment:delete` | Row/Detail-page Delete action; the Allocations table's Delete row action. |
+| `payment:post` | The Detail page's "Post Payment" action. |
+
+Every check is independent — no page inherits a permission from a parent gate. **Cosmetic only**, same caveat as every prior module: the backend re-validates every gated route regardless of what the UI shows or hides.
+
+### Payment Lifecycle
+
+```
+   draft ──────────────────────────────▶ posted
+     │                                      │
+     ├─ editable (PUT)                      └─ fully immutable:
+     ├─ deletable (soft delete, DELETE)         no edit, no delete,
+     ├─ allocations: create/update/delete        no allocation changes
+     └─ postable (POST .../post)                 (409 PAYMENT_NOT_DRAFT /
+                                                   PAYMENT_ALLOCATION_PAYMENT_NOT_DRAFT
+                                                   on any attempt)
+
+   cancelled  (PaymentStatus enum value exists; no backend transition reaches it — see
+               "Known Backend Limitations")
+```
+
+Confirmed against `app/modules/payments/service.py`'s `_ensure_draft`/`_ensure_draft_for_allocation`:
+
+- **Draft payments are editable** — `PaymentEditPage`/`PaymentForm`, no client-side status gate (the backend's 409 is the real one; the page doesn't pre-block a non-draft payment, mirroring `InvoiceEditPage`).
+- **Posted payments are read-only** — `PaymentDetailPage` hides Edit/Delete/Post the moment `status !== "draft"`; the header renders no primary/secondary action at all once posted.
+- **Allocation CRUD is draft-only** — `PaymentAllocationTable` computes `isDraft = paymentStatus === "draft"` once and gates Add (`canAdd`) and the row-actions builder (`isDraft ? rowActionsFor : () => []`) off that single value; listing stays visible regardless of status, matching the backend's own "allowed regardless of payment status" list behavior.
+- **Delete is draft-only** — hidden on both the List row action and the Detail page's secondary actions once posted.
+- **Post is draft-only** — the Detail page's only primary action, shown only while draft.
+
+Every one of these is a UI convenience, never the enforcement point — the backend's own 409/422 remains authoritative in every case, and none of this session's pages special-case a stale/cached status: a concurrent post from another tab still gets rejected server-side even if this client's cache briefly still shows `draft`.
+
+### Payment Allocation
+
+A `PaymentAllocation` links one payment to one invoice for a given amount (`app/modules/payments/schemas.py`'s `PaymentAllocationResponse`: `id, payment_id, invoice_id, allocated_amount, created_at` — no `updated_at`, since allocations are append-only/hard-deleted rather than `TimestampMixin`-based like `Payment` itself). `PaymentAllocationTable` (rendered inline on `PaymentDetailPage`, not a separate route) owns list/add/edit/delete for one payment's allocations, mirroring `InvoiceItemTable`'s Dialog-based CRUD-on-a-Detail-page shape exactly.
+
+**Columns are Invoice Number, Invoice Date, Invoice Total, Allocated Amount, Invoice Balance, Actions** — every value rendered straight from a backend response. The spec's suggested "Balance Before" column was deliberately **not** built: the backend exposes no point-in-time "balance before this allocation" snapshot anywhere, and computing one client-side (replaying allocation history) would be exactly the kind of financial calculation this module is required never to perform. "Invoice Balance" instead shows the invoice's real, current `balance_amount` as `GET /invoices/{id}` returns it today.
+
+**Resolving the referenced invoices.** `PaymentAllocationResponse` carries only `invoice_id` — no nested invoice data. Since Invoices (like Trips) is an unbounded transactional resource with no small "pick from a list" options set, each unique `invoice_id` referenced by the current allocations is resolved individually via `useQueries`, deduplicated and cached under the exact same `invoiceKeys.detail(id)` key `useInvoice` itself uses (`useAllocationInvoices`, a local hook inside `payment-allocation-table.tsx`, mirroring `invoice-item-form.tsx`'s own `useTripNumbers`).
+
+**The Allocation form is two fields, on purpose** — Invoice (a searchable selector scoped to the payment's own company via the real, backend-supported `company_id` filter — a UX convenience only, since the backend itself never requires the allocated invoice to belong to the same company as the payment) and Allocation Amount. No Balance/Status/derived field is ever a submitted input.
+
+**The backend's two allocation ceilings are deliberately left server-validated only.** `allocated_amount` must not exceed the invoice's current `balance_amount` nor the payment's current `unallocated_amount` (`app/modules/payments/domain/allocation.py`'s `validate_allocation_amount`); for an *update*, the backend additionally adds back this same allocation's own prior amount before comparing — a live, transaction-scoped adjustment. Reproducing that from client-cached data would risk drifting from the source of truth the moment two allocations changed concurrently, so both ceilings are surfaced as informational hints only (the invoice's balance in the selector's option description, the payment's unallocated amount under the Amount field) and the backend's real 422 (`PAYMENT_ALLOCATION_AMOUNT_EXCEEDED`) is what actually enforces them — the same choice this codebase already made for `InvoiceItemForm`'s/`TripCatchSelectorField`'s own cross-entity ceilings ("quantity exceeds available_quantity").
+
+### Posting
+
+Post (`POST /payments/{id}/post`, `payment:post`) is the module's one true business transaction — `draft → posted`, irreversible, gated behind a `ConfirmationDialog` on the Detail page (`usePostPayment`). Confirmed from `PaymentService.post` (row-locked `SELECT ... FOR UPDATE`, one transaction):
+
+1. Requires `draft` status (one check covers both "already posted" and "cancelled").
+2. Requires at least one allocation (422 `PAYMENT_NO_ALLOCATIONS` otherwise).
+3. Recomputes `allocated_amount`/`unallocated_amount` from the sum of currently-active allocations — never trusts whatever was last persisted.
+4. Verifies `allocated_amount + unallocated_amount == amount` (a defensive invariant check).
+5. Assigns `payment_number` via a locked per-tenant/fiscal-year sequence (`PAY/{fiscal_year}/{seq}`).
+6. Marks `posted`.
+
+**What Post does NOT do**: it does not touch `Invoice.paid_amount`/`balance_amount`/`status` or `Company.outstanding_amount` — those were already kept correct by every allocation create/update/delete made while the payment was draft (the outstanding-engine cascade documented under "Payment Allocation" above). `usePostPayment` therefore invalidates only `paymentKeys.detail(id)` and `paymentKeys.lists()` — deliberately narrower than `useIssueInvoice`'s reach into `companyKeys`/`tripCatchKeys`, because posting a payment genuinely has no invoice/company side effect to invalidate.
+
+Ledger entries, receipt generation, and outbox events are explicitly `TODO(Sprint 11)` inside the backend's own `post()` method — not implemented, and not something this frontend pretends exists.
+
+### Business Flow
+
+```
+List (search/filter/sort/paginate)
+  ├─ row action / row click "View" ──────────▶ Detail (read-only header + Allocations)
+  ├─ row action "Edit" (draft only) ──────────▶ Edit (PaymentForm, pre-filled)
+  └─ primary action "New Payment" ────────────▶ Create (PaymentForm, empty)
+
+Detail
+  ├─ secondary action "Edit" (draft only) ────▶ Edit
+  ├─ secondary action "Delete" (draft only) ──▶ DeleteConfirmationDialog ──▶ useDeletePayment()
+  ├─ primary action "Post Payment" (draft only) ▶ ConfirmationDialog ──▶ usePostPayment()
+  └─ Allocations section (draft only add/edit/delete)
+       ├─ "Add Allocation" ─────────────────────▶ Dialog(PaymentAllocationForm) ──▶ useCreatePaymentAllocation()
+       ├─ row action "Edit" ────────────────────▶ Dialog(PaymentAllocationForm, pre-filled) ──▶ useUpdatePaymentAllocation()
+       └─ row action "Delete" ──────────────────▶ DeleteConfirmationDialog ──▶ useDeletePaymentAllocation()
+```
+
+`PaymentForm` is the single shared header form for Create and Edit — Customer, Payment Date, Payment Method, Amount, Reference Number, Bank Name, Remarks — same zod validation, same submit/error handling (422 → `mapServerErrorsToForm`, anything else → `toastError`) as `InvoiceForm`. `useDeletePayment` owns the entire delete outcome (invalidate `paymentKeys.lists()`, remove `paymentKeys.detail(id)`/`paymentAllocationKeys.byPayment(id)`, `toastSuccess`, navigate to `/payments`) so the Detail page's Delete action and the List page's row action behave identically, mirroring `useDeleteInvoice`.
+
+**Cascading invalidation on every allocation mutation.** Creating, updating, or deleting an allocation recalculates the parent payment's totals *and* the target invoice's `paid_amount`/`balance_amount`/`status` *and* that invoice's billed company's `outstanding_amount`, all server-side in one transaction. The three allocation mutation hooks invalidate exactly `paymentKeys.detail()`, `paymentAllocationKeys.byPayment()`, `invoiceKeys.detail()` (both the old and new invoice, for a retargeted update), and `companyKeys.detail()` — the last resolved by reading the already-cached invoice out of the query client (`queryClient.getQueryData<Invoice>(invoiceKeys.detail(id))`) rather than an extra fetch, since the allocation response itself carries no company reference.
+
+Every action is permission-gated — see "Permission Model" above.
+
+### BFF Integration
+
+Same proxy pattern every prior module uses, no new mechanism: `payment-service.ts`/`payment-allocation-service.ts` talk only to the Next.js BFF's own routes, never the FastAPI backend directly (the browser holds no bearer token to attach — it lives in an `HttpOnly` cookie only the Next.js server can read). Every BFF route handler does nothing but call `authenticatedBackendRequest()` and forward the JSON response — no Payment-specific auth code exists anywhere.
+
+| BFF route | Methods | Backend route |
+|---|---|---|
+| `/api/payments` | GET, POST | `/payments` |
+| `/api/payments/[id]` | GET, PUT, DELETE | `/payments/{id}` |
+| `/api/payments/[id]/post` | POST | `/payments/{id}/post` |
+| `/api/payments/[id]/allocations` | GET, POST | `/payments/{id}/allocations` |
+| `/api/payments/[id]/allocations/[allocationId]` | PUT, DELETE | `/payments/{id}/allocations/{allocation_id}` |
+
+Ten HTTP handlers across five route files, one-to-one with the backend's own ten routes — no invented endpoint, no missing one.
+
+### Production QA Findings (Sprint 8 Session 5)
+
+A dedicated audit pass over every file in `features/payments/` plus `app/api/payments/**` — no new CRUD scope, fix only what's found, mirroring the Companies/Fish/Boats modules' own closing QA-pass process.
+
+- **Lifecycle** — re-verified Draft-editable, Posted-read-only, Allocation-CRUD-draft-only, Delete-draft-only, Post-draft-only against the backend's actual `_ensure_draft`/`_ensure_draft_for_allocation` checks. All correct, no code changes required.
+- **Financial behavior** — grepped every file in the module for arithmetic on money fields; the only two `Number(value)` calls found are zod `.refine()` validation checks (`> 0`), not calculations that produce a new financial value. Every allocated/unallocated/balance/status/outstanding figure displayed anywhere renders straight from a backend response via `formatCurrency`/`formatDate`, never recomputed.
+- **Permissions** — grepped every `hasPermission()` call in the module; confirmed exactly the five codes `permissions.py` defines are used, with no invented `payment:issue`/`payment:cancel`/`payment_allocation:*` code anywhere.
+- **Accessibility** — Dialogs (Radix-based) inherit focus trap/Escape-to-close/return-focus-to-trigger by construction; every form field's `aria-invalid`/`aria-describedby` comes from `FormField`'s shared render props, including the Allocation form's Amount field description hint; no custom widget was built that bypasses this. No gaps found.
+- **Performance** — query keys are stable and content-hashed (`paymentKeys`/`paymentAllocationKeys` factories); `usePaymentAllocations`/`usePaymentAllocation` deliberately share one queryKey/queryFn so TanStack Query dedupes the request rather than issuing two; columns and row-actions are memoized (`useMemo`/`useCallback`) on both the List and Allocations tables; no route wrapper carries an unnecessary `"use client"`.
+- **Cleanup** — no `console.log`/`TODO`/`FIXME` found anywhere in the module (grepped). Three stale doc comments fixed: `use-payment.ts` still described itself as "for a future Detail page — not yet consumed by any page," false since Session 3; `payment-columns.tsx` still said the Actions column was "Edit only, draft-only, as of Session 2," stale since Session 4 added View/Delete; `payment-filters.ts` promised the date-range filter was "left for Sprint 8 Session 2," a promise Session 2 never fulfilled (it was Create/Edit scope, not filters) and which had gone stale two sessions later.
+- **Duplication reviewed, not extracted**: `payment-form-schema.ts` and `payment-allocation-form.tsx` each declare an identical `AMOUNT_PATTERN` regex (`NUMERIC(14,2)`), and `payment-form.tsx` duplicates the `toDateOrUndefined`/`toIsoDateString` helpers already present in `invoice-form.tsx`/`boat-form.tsx`/`trip-catch-form.tsx`/`trip-expense-form.tsx`. Both are the codebase's own established, deliberate per-file colocation convention (the same literal duplication already exists between, e.g., `trip-expense-form-schema.ts` and this module) rather than something introduced here — extracting a shared helper now would be a new abstraction this session's scope doesn't call for, not a genuine cleanup.
+- **Not done**: no live browser/screen-reader session was run for this pass — findings came from static code review of every file in `features/payments/` plus `app/api/payments/**`, not fresh empirical testing of every breakpoint/theme combination.
+
+### Extension Guidelines
+
+For the next module with its own state machine or nested sub-resource:
+
+1. **Read the actual state-machine transitions from `service.py` before gating any UI action** — don't assume a "draft/active/done" shape by rote; Payments' `draft → posted` (with an unreachable `cancelled` sitting in the enum) was verified from `_ensure_draft`, not guessed.
+2. **A nested sub-resource with no pagination and no single-GET endpoint** (like `PaymentAllocation`) is best served by one list hook whose queryKey a "single item" selector hook shares (`select: (list) => list.find(...)`) — never invent a GET-by-id endpoint the backend doesn't expose.
+3. **When a mutation cascades into another module's data**, invalidate that module's own query keys directly (`invoiceKeys.detail()`, `companyKeys.detail()`) rather than duplicating its cache-update logic — and when the id needed for that invalidation (e.g. a company id) isn't in the mutation's own response, read it from the query client's already-cached data before invalidating, rather than issuing an extra fetch just for that purpose.
+4. **Leave cross-entity ceilings that depend on live, transaction-scoped backend state server-validated only** (as this module did for the allocation-amount ceilings) — show the known bound as an informational hint, not a hard client-side max, unless the ceiling is a simple, static comparison you can prove never drifts from what the backend actually checks.
+5. **Run the same closing QA pass** (lifecycle re-verification, financial-calculation grep, permission grep, accessibility/performance review, cleanup) before calling the module done — this session's findings (three stale comments, zero real bugs) show the value is largely in *catching drift*, not first-time defects, once a module is already built by mirroring a hardened pattern.
+
+### Known Backend Limitations
+
+Verified by reading `app/modules/payments/router.py` in full (exactly ten routes) rather than assumed — none of the four below exist anywhere in the backend, and the frontend does not pretend otherwise:
+
+- **No Cancel endpoint.** `PaymentStatus.CANCELLED` exists in the backend's enum, and `permissions.py`'s own comment references a "Draft → Posted → Cancelled state machine," but no route transitions a payment to it. `PAYMENT_STATUS_BADGE_VARIANT`/`_LABELS` still handle the value (it must be exhaustively covered in TypeScript), but nothing in the UI can reach it.
+- **No Refund endpoint.** No route, no concept — consistent with CLAUDE.md's "financial corrections use credit notes/reversal entries," not a refund model.
+- **No Ledger posting.** `PaymentService.post()`'s own source has an explicit `TODO(Sprint 11): INSERT ledger_entries` comment — not implemented, not stubbed, not simulated client-side.
+- **No Bank reconciliation.** `cheque_status`/`cleared_at` are mentioned in the backend's own code comments as a future sprint's scope; no such fields exist on `Payment` today, and no UI references them.
+
+Any of the four becoming real backend endpoints is a prerequisite for the matching frontend work — not something this module can build ahead of the API that would back it.
+
 ## Current Status
 
-**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and a finalization pass. **Sprint 3 (Sessions 1–5) — complete** — the Companies module: full CRUD (List/Create/Edit/Detail/Delete) against the live backend, URL-synced list state, UX polish, and a final QA/hardening pass — see "Companies Module" above. **Sprint 4 (Sessions 1–5) — complete** — the Fish module: full CRUD built by deliberately mirroring the Companies architecture, URL-synced list state, a production-polish pass, and a final QA/hardening pass — see "Fish Module" above. **Sprint 5 (Sessions 1–6) — complete** — the Boat module: full CRUD, URL-synced list state, a production-polish pass, a final QA/hardening pass, and a Session 6 business-model correction (removed an incorrectly-added `company_id` boat-ownership field — a boat belongs to the tenant only) — see "Boat Module" above. The Companies module proved the reusable library out end-to-end; Fish proved the *pattern itself* replicates to a second module with a different (coarser) permission model; Boats proved that even a completed, QA-passed module can carry a business-model defect that only a domain-level review catches, not a code-level one.
+**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and a finalization pass. **Sprint 3 (Sessions 1–5) — complete** — the Companies module: full CRUD (List/Create/Edit/Detail/Delete) against the live backend, URL-synced list state, UX polish, and a final QA/hardening pass — see "Companies Module" above. **Sprint 4 (Sessions 1–5) — complete** — the Fish module: full CRUD built by deliberately mirroring the Companies architecture, URL-synced list state, a production-polish pass, and a final QA/hardening pass — see "Fish Module" above. **Sprint 5 (Sessions 1–6) — complete** — the Boat module: full CRUD, URL-synced list state, a production-polish pass, a final QA/hardening pass, and a Session 6 business-model correction (removed an incorrectly-added `company_id` boat-ownership field — a boat belongs to the tenant only) — see "Boat Module" above. **Sprints 6–7** shipped the Trips (with Trip Catch/Trip Expense sub-resources) and Invoices modules against the live backend — both are in active use by later modules (Payment Allocation reuses `invoiceService`/`invoiceKeys` directly, per "Payment Module" below) but do not yet have their own dedicated sections in this README; that documentation gap predates Sprint 8 and is called out here rather than silently left unmentioned. **Sprint 8 (Sessions 1–5) — complete** — the Customer Payments module: full lifecycle (List/Create/Edit/Detail/Allocate/Post/Delete) against the live backend, the first module with a real state machine (`draft → posted`) and a cross-module-cascading nested sub-resource (allocations against Invoices, cascading into Invoice and Company balances), plus a final QA/hardening pass — see "Payment Module" above. The Companies module proved the reusable library out end-to-end; Fish proved the *pattern itself* replicates to a second module with a different (coarser) permission model; Boats proved that even a completed, QA-passed module can carry a business-model defect that only a domain-level review catches, not a code-level one; Payments proved the pattern extends to a module with genuine lifecycle state and cross-module financial cascades, with the backend remaining the sole source of truth for every calculation throughout.
 
 - Project scaffold, TypeScript strict mode, ESLint, Tailwind v4.
 - shadcn/ui configured (New York style, Slate base color, CSS variables).
@@ -758,5 +939,7 @@ For the next module (Trips, per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencin
 - The Companies module (`src/features/companies/`) — see "Companies Module" above. `nuqs` added as a dependency in Sprint 3 Session 4 for URL-synced list state.
 - The Fish module (`src/features/fish/`) — see "Fish Module" above. No new dependencies; proves the Companies pattern replicates to a module with a coarser (`view`/`manage`) permission model and no dedicated `status` column.
 - The Boat module (`src/features/boats/`) — see "Boat Module" above. No new dependencies; proves the pattern extends to a module with a genuinely tri-state boolean filter (`insuranceExpired`/`licenseExpired`). Two rounds of hardening (production polish + final QA) complete, same bar as Companies/Fish, plus a Session 6 business-model correction that removed an incorrect `company_id` foreign key added in Sessions 1–5 — a boat is owned by the tenant only, never by a `Company` (a customer) — see "Business Model Correction" above.
+- The Trips module (`src/features/trips/`, including Trip Catch/Trip Expense sub-resources) and the Invoices module (`src/features/invoices/`, including Invoice Items) — both shipped (Sprints 6–7) and in active use (Payment Allocation's Invoice selector and cascading invalidation both reuse `invoiceService`/`invoiceKeys` directly), but neither has its own dedicated architecture section in this README yet — a pre-existing documentation gap, not a Sprint 8 regression.
+- The Customer Payments module (`src/features/payments/`) — see "Payment Module" above. No new dependencies. The first module built with a genuine backend state machine (`draft → posted`) and a nested sub-resource (allocations) whose mutations cascade into two other modules' data (Invoice, Company) — every cascade is invalidated via TanStack Query, never recomputed client-side. Known backend limitations (no Cancel/Refund endpoint, no ledger posting, no bank reconciliation) are documented rather than worked around.
 
-Next up: the next Masters module per `08_FRONTEND_IMPLEMENTATION_PLAN.md`'s sequencing (Trips, ...), following the same pattern the Companies, Fish, and Boat modules now establish.
+Next up: whichever module `08_FRONTEND_IMPLEMENTATION_PLAN.md` sequences after Payments, following the same pattern the Companies, Fish, Boat, and Payment modules now establish — plus, opportunistically, backfilling the still-missing Trips/Invoices architecture sections noted above.
