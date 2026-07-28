@@ -89,6 +89,14 @@ _OPENAPI_TAGS = [
             "own build order."
         ),
     },
+    {
+        "name": "dashboard",
+        "description": (
+            "Read-only, server-aggregated business overview (KPIs, operations, "
+            "financial, recent activity, alerts) spanning invoices, payments, trips, "
+            "boats, trip catches, purchase bills and supplier payments."
+        ),
+    },
     {"name": "health", "description": "Liveness check."},
 ]
 

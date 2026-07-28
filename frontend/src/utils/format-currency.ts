@@ -24,3 +24,30 @@ export function formatCurrency(
     maximumFractionDigits: 2,
   }).format(numeric);
 }
+
+/**
+ * A short form of `formatCurrency` (e.g. "₹35K", "₹6.1L") for contexts with
+ * limited space — chart axis ticks — where `formatCurrency`'s full
+ * 2-decimal precision doesn't fit and isn't needed; the exact figure still
+ * shows in full via `formatCurrency` wherever precision matters (tooltips,
+ * KPI cards, tables).
+ */
+export function formatCompactCurrency(
+  value: string | number,
+  currency: string = APP_CONFIG.defaultCurrency,
+  locale: string = APP_CONFIG.defaultLocale
+): string {
+  const numeric = typeof value === "string" ? Number(value) : value;
+
+  if (!Number.isFinite(numeric)) {
+    return "—";
+  }
+
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency,
+    notation: "compact",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 1,
+  }).format(numeric);
+}

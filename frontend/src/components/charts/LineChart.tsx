@@ -32,6 +32,10 @@ export interface LineChartProps {
   showLegend?: boolean;
   showGrid?: boolean;
   valueFormatter?: (value: number) => string;
+  /** Formats the Y axis' own tick labels specifically - defaults to `valueFormatter` when omitted. Pass a shorter form (e.g. a compact currency formatter) when `valueFormatter` is too wide to fit the axis; the tooltip keeps using `valueFormatter` either way. */
+  axisValueFormatter?: (value: number) => string;
+  /** Width reserved for the Y axis - widen it if tick labels are still clipped after supplying a shorter `axisValueFormatter`. */
+  yAxisWidth?: number;
   className?: string;
 }
 
@@ -53,6 +57,8 @@ export function LineChart({
   showLegend = true,
   showGrid = true,
   valueFormatter,
+  axisValueFormatter,
+  yAxisWidth = 64,
   className,
 }: LineChartProps) {
   if (isLoading) return <ChartLoading height={height} className={className} />;
@@ -74,8 +80,8 @@ export function LineChart({
             tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
             tickLine={false}
             axisLine={false}
-            width={48}
-            tickFormatter={valueFormatter}
+            width={yAxisWidth}
+            tickFormatter={axisValueFormatter ?? valueFormatter}
           />
           <RechartsTooltip
             content={

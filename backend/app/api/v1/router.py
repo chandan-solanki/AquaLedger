@@ -4,6 +4,7 @@ from app.api.v1 import health
 from app.modules.auth.router import router as auth_router
 from app.modules.boats.router import router as boats_router
 from app.modules.companies.router import router as companies_router
+from app.modules.dashboard.router import router as dashboard_router
 from app.modules.fish.router import router as fish_router
 from app.modules.invoices.router import router as invoices_router
 from app.modules.payments.router import router as payments_router
@@ -28,3 +29,4 @@ api_v1_router.include_router(payments_router)
 api_v1_router.include_router(suppliers_router)
 api_v1_router.include_router(purchase_router)
 api_v1_router.include_router(supplier_payments_router)
+api_v1_router.include_router(dashboard_router)

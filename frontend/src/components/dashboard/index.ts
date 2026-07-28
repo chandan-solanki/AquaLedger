@@ -1,5 +1,8 @@
-export { DashboardGrid, type DashboardGridProps } from "./DashboardGrid";
+export { AlertsCard, type AlertsCardItem, type AlertsCardProps } from "./AlertsCard";
 export { MetricGrid, type MetricGridProps } from "./MetricGrid";
 export { RecentActivityCard, type RecentActivityItem, type RecentActivityCardProps } from "./RecentActivityCard";
-export { QuickActionsCard, type QuickAction, type QuickActionsCardProps } from "./QuickActionsCard";
-export { SummarySection, type SummarySectionProps } from "./SummarySection";
+export {
+  DashboardMiniTable,
+  type DashboardMiniTableColumn,
+  type DashboardMiniTableProps,
+} from "./DashboardMiniTable";
