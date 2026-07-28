@@ -916,9 +916,305 @@ Verified by reading `app/modules/payments/router.py` in full (exactly ten routes
 
 Any of the four becoming real backend endpoints is a prerequisite for the matching frontend work — not something this module can build ahead of the API that would back it.
 
+## Supplier Payment Module (Sprint 9) — Complete
+
+The Supplier Payments module — the buy-side counterpart of Customer Payments, full lifecycle (List/Create/Edit/Detail/Allocate/Post/Delete) against the live backend, `features/supplier-payments/` (mirrors `app/modules/supplier_payments/` on the backend). Built across five sessions (List foundation; Create/Edit; Detail + Allocation CRUD; Post + Delete; a final QA/hardening pass); this section documents the module as it stands now, not session-by-session. **Status: production-ready for its stated scope** — see "Known Backend Limitations" below for what the backend itself doesn't support yet.
+
+Same shape as Payments — a real state machine (`draft → posted`, with an unreachable `cancelled` value reserved in the enum) and a child sub-resource (allocations against Purchase Bills) whose own mutations cascade into Purchase Bill and Supplier balances server-side.
+
+**Update:** at the time this module was first built (Sessions 1–4), no `purchase-bills` or `suppliers` frontend feature existed yet, so it carried its own small, local, read-only lookups for both (`use-supplier-options.ts`'s inline fetch, a local `purchase-bill.ts`/`purchase-bill-service.ts`) instead of standing up two full feature modules a single selector and filter dropdown didn't otherwise need. Both real features (`features/suppliers/`, `features/purchase-bills/` — see their own sections below) have since been built, and this module's lookups were retired in favor of them: `useSupplierOptions()` now calls `supplierService`/`supplierKeys` from `@/features/suppliers`, and the Allocation form/table now import `purchaseBillService`/`purchaseBillKeys`/`PurchaseBill` from `@/features/purchase-bills`, exactly mirroring how Payment Allocation always resolved its own `invoice_id`/`company_id` through the already-existing `invoices`/`companies` features.
+
+### Architecture
+
+```
+features/supplier-payments/
+  types/
+    supplier-payment.ts            # BackendSupplierPayment (snake_case) + SupplierPayment (camelCase) + mapBackendSupplierPayment()
+                                    # + SupplierPaymentCreateRequest/SupplierPaymentUpdateRequest/SupplierPaymentListParams
+    supplier-payment-allocation.ts # BackendSupplierPaymentAllocation + SupplierPaymentAllocation + mapBackendSupplierPaymentAllocation()
+                                    # + SupplierPaymentAllocationCreateRequest/SupplierPaymentAllocationUpdateRequest
+    purchase-bill.ts               # BackendPurchaseBill + PurchaseBill + mapBackendPurchaseBill() - a minimal, LOCAL
+                                    # subset (id/supplier_id/bill_number/bill_date/status/total_amount/balance_amount)
+                                    # of the backend's full PurchaseBillResponse - only the fields the Allocation
+                                    # selector/table actually render, since there's no purchase-bills feature to
+                                    # import a full type from
+  services/
+    supplier-payment-service.ts            # listSupplierPayments/getSupplierPayment/createSupplierPayment/
+                                            # updateSupplierPayment/deleteSupplierPayment/postSupplierPayment
+    supplier-payment-allocation-service.ts # listSupplierPaymentAllocations/createSupplierPaymentAllocation/
+                                            # updateSupplierPaymentAllocation/deleteSupplierPaymentAllocation
+    purchase-bill-service.ts               # listPurchaseBills/getPurchaseBill + purchaseBillKeys - the module's own
+                                            # minimal, read-only Purchase Bill lookup (see "BFF Integration" below)
+  hooks/                     # useSupplierPayments, useSupplierPayment, useSupplierPaymentFilters (URL state),
+                             # useCreateSupplierPayment, useUpdateSupplierPayment, useDeleteSupplierPayment,
+                             # usePostSupplierPayment, useSupplierPaymentAllocations, useSupplierPaymentAllocation,
+                             # useCreateSupplierPaymentAllocation, useUpdateSupplierPaymentAllocation,
+                             # useDeleteSupplierPaymentAllocation, useSupplierOptions
+  schemas/
+    supplier-payment-filters.ts     # SupplierPaymentFilters shape + toSupplierPaymentListParams() mapper
+    supplier-payment-form-schema.ts # zod schema, SupplierPaymentFormValues, form <-> SupplierPayment/request payload mappers
+                                     # (the allocation form's own tiny 2-field zod schema is colocated in its
+                                     # component instead - see "Supplier Payment Allocation" below)
+  constants/                 # supplier-payment-status.ts, supplier-payment-method.ts,
+                              # query-keys.ts (supplierPaymentKeys, supplierPaymentAllocationKeys)
+  components/                # supplier-payment-columns.tsx, supplier-payment-row-actions.tsx, supplier-payment-form.tsx,
+                              # supplier-payment-allocation-columns.tsx, supplier-payment-allocation-row-actions.tsx,
+                              # supplier-payment-allocation-form.tsx, supplier-payment-allocation-table.tsx
+  pages/                      # supplier-payment-list-page.tsx, supplier-payment-detail-page.tsx,
+                              # supplier-payment-create-page.tsx, supplier-payment-edit-page.tsx
+  index.ts                   # barrel — the module's public surface
+```
+
+`app/(authenticated)/supplier-payments/{page.tsx, new/page.tsx, [id]/page.tsx, [id]/edit/page.tsx}` are thin, server-rendered route wrappers — no `"use client"`, no logic — that just render the matching `features/supplier-payments/pages/*` component, same as every prior module.
+
+**No Payment Number field anywhere in a form.** `payment_number` is assigned only at Post (a locked, per-tenant/fiscal-year sequence) — never client-supplied, never present in `SupplierPaymentCreateRequest`/`SupplierPaymentUpdateRequest`. Same for `allocated_amount`/`unallocated_amount`/`status`: all four are server-owned from creation through posting, and `SupplierPaymentForm` exposes none of them.
+
+**`SupplierPaymentResponse`/`SupplierPaymentAllocationResponse` carry only foreign-key ids, never nested objects** — `supplier_id` on a payment, `purchase_bill_id` on an allocation. Both are resolved to display data client-side: `useSupplierOptions()` (this module's own hook) for the supplier name, and `purchase-bill-service.ts` (this module's own minimal lookup, not a full feature) for the referenced bill's number/date/total/balance.
+
+### Permission Model
+
+Five permission codes gate the module, read via `usePermissions()` — the same `resource:action` codes the backend's RBAC model defines (`app/modules/supplier_payments/permissions.py`), with no separate `supplier_payment_allocation:*` set: allocation endpoints reuse the supplier payment codes.
+
+| Code | Gates |
+|---|---|
+| `supplier_payment:view` | Reaching the List/Detail pages; the row-level View action; whether a List row click navigates. |
+| `supplier_payment:create` | "New Supplier Payment" (header + empty-state CTA); the Detail page's "Add Allocation" button. |
+| `supplier_payment:edit` | Row/Detail-page Edit action; the Allocations table's Edit row action. |
+| `supplier_payment:delete` | Row/Detail-page Delete action; the Allocations table's Delete row action. |
+| `supplier_payment:post` | The Detail page's "Post Payment" action. |
+
+Every check is independent — no page inherits a permission from a parent gate. **Cosmetic only**, same caveat as every prior module: the backend re-validates every gated route regardless of what the UI shows or hides.
+
+### Supplier Payment Lifecycle
+
+```
+   draft ──────────────────────────────▶ posted
+     │                                      │
+     ├─ editable (PUT)                      └─ fully immutable:
+     ├─ deletable (soft delete, DELETE)         no edit, no delete,
+     ├─ allocations: create/update/delete        no allocation changes
+     └─ postable (POST .../post)                 (409 SUPPLIER_PAYMENT_NOT_DRAFT /
+                                                   SUPPLIER_PAYMENT_ALLOCATION_PAYMENT_NOT_DRAFT
+                                                   on any attempt)
+
+   cancelled  (SupplierPaymentStatus enum value exists; no backend transition reaches it — see
+               "Known Backend Limitations")
+```
+
+Confirmed against `app/modules/supplier_payments/service.py`'s `_ensure_draft`/`_ensure_draft_for_allocation`:
+
+- **Draft payments are editable** — `SupplierPaymentEditPage`/`SupplierPaymentForm`, no client-side status gate (the backend's 409 is the real one; the page doesn't pre-block a non-draft payment, mirroring `PaymentEditPage`).
+- **Posted payments are read-only** — `SupplierPaymentDetailPage` hides Edit/Delete/Post the moment `status !== "draft"`; the header renders no primary/secondary action at all once posted.
+- **Allocation CRUD is draft-only** — `SupplierPaymentAllocationTable` computes `isDraft = supplierPaymentStatus === "draft"` once and gates Add (`canAdd`) and the row-actions builder (`isDraft ? rowActionsFor : () => []`) off that single value; listing stays visible regardless of status, matching the backend's own "allowed regardless of payment status" list behavior.
+- **Delete is draft-only** — hidden on both the List row action and the Detail page's secondary actions once posted.
+- **Post is draft-only** — the Detail page's only primary action, shown only while draft.
+
+Every one of these is a UI convenience, never the enforcement point — the backend's own 409/422 remains authoritative in every case.
+
+### Supplier Payment Allocation
+
+A `SupplierPaymentAllocation` links one supplier payment to one purchase bill for a given amount (`app/modules/supplier_payments/schemas.py`'s `SupplierPaymentAllocationResponse`: `id, supplier_payment_id, purchase_bill_id, allocated_amount, created_at` — no `updated_at`, since allocations are append-only/hard-deleted rather than `TimestampMixin`-based like `SupplierPayment` itself). `SupplierPaymentAllocationTable` (rendered inline on `SupplierPaymentDetailPage`, not a separate route) owns list/add/edit/delete for one payment's allocations, mirroring `PaymentAllocationTable`'s Dialog-based CRUD-on-a-Detail-page shape exactly.
+
+**Columns are Purchase Bill Number, Bill Date, Bill Total, Allocated Amount, Bill Balance, Actions** — every value rendered straight from a backend response. "Bill Balance" shows the bill's real, current `balance_amount` as `GET /purchase/{id}` returns it today — never a computed "balance before this allocation" snapshot, which the backend exposes nowhere.
+
+**Resolving the referenced purchase bills.** `SupplierPaymentAllocationResponse` carries only `purchase_bill_id` — no nested bill data, and there is no bounded "all purchase bills" options list to resolve against (Purchase Bills, like Invoices, is an unbounded transactional resource). Each unique `purchase_bill_id` referenced by the current allocations is resolved individually via `useQueries`, deduplicated and cached under the exact same `purchaseBillKeys.detail(id)` key the Allocation form's own selector uses (`useAllocationPurchaseBills`, a local hook inside `supplier-payment-allocation-table.tsx`, mirroring `useAllocationInvoices`).
+
+**The Allocation form is two fields, on purpose** — Purchase Bill (a searchable selector scoped to the payment's own supplier via the real, backend-supported `supplier_id` filter — a UX convenience only, since the backend itself never requires the allocated bill to belong to the same supplier as the payment) and Allocation Amount. No Balance/Status/derived field is ever a submitted input. The selector's option description shows Bill Date, Balance and Total — "Supplier" is deliberately omitted from it, since every result is already scoped to the one supplier the payment belongs to.
+
+**The backend's two allocation ceilings are deliberately left server-validated only.** `allocated_amount` must not exceed the purchase bill's current `balance_amount` nor the payment's current `unallocated_amount` (`app/modules/supplier_payments/domain/allocation.py`'s `validate_allocation_amount`); for an *update*, the backend additionally adds back this same allocation's own prior amount before comparing — a live, transaction-scoped adjustment. Both ceilings are surfaced as informational hints only (the bill's balance/total in the selector's option description, the payment's unallocated amount under the Amount field) and the backend's real 422 (`SUPPLIER_PAYMENT_ALLOCATION_AMOUNT_EXCEEDED`) is what actually enforces them — the same choice `PaymentAllocationForm` made for its own ceilings.
+
+### Posting
+
+Post (`POST /supplier-payments/{id}/post`, `supplier_payment:post`) is the module's one true business transaction — `draft → posted`, irreversible, gated behind a `ConfirmationDialog` on the Detail page (`usePostSupplierPayment`). Confirmed from `SupplierPaymentService.post` (row-locked `SELECT ... FOR UPDATE`, one transaction):
+
+1. Requires `draft` status (one check covers both "already posted" and "cancelled").
+2. Requires at least one allocation (422 `SUPPLIER_PAYMENT_NO_ALLOCATIONS` otherwise).
+3. Recomputes `allocated_amount`/`unallocated_amount` from the sum of currently-active allocations — never trusts whatever was last persisted.
+4. Verifies `allocated_amount + unallocated_amount == amount` (a defensive invariant check).
+5. Assigns `payment_number` via a locked per-tenant/fiscal-year sequence (`SPAY/{fiscal_year}/{seq}`).
+6. Marks `posted`.
+
+**What Post does NOT do**: it does not touch `PurchaseBill.paid_amount`/`balance_amount`/`status` or `Supplier.outstanding_amount` — those were already kept correct by every allocation create/update/delete made while the payment was draft (the outstanding-engine cascade documented under "Supplier Payment Allocation" above). `usePostSupplierPayment` therefore invalidates only `supplierPaymentKeys.detail(id)` and `supplierPaymentKeys.lists()` — deliberately narrow, because posting a supplier payment genuinely has no purchase-bill/supplier side effect to invalidate.
+
+Ledger entries, receipt generation, and outbox events are explicitly `TODO(future sprint)` inside the backend's own `post()` method — not implemented, and not something this frontend pretends exists.
+
+### Business Flow
+
+```
+List (search/filter/sort/paginate)
+  ├─ row action / row click "View" ──────────▶ Detail (read-only header + Allocations)
+  ├─ row action "Edit" (draft only) ──────────▶ Edit (SupplierPaymentForm, pre-filled)
+  └─ primary action "New Supplier Payment" ───▶ Create (SupplierPaymentForm, empty)
+
+Detail
+  ├─ secondary action "Edit" (draft only) ────▶ Edit
+  ├─ secondary action "Delete" (draft only) ──▶ DeleteConfirmationDialog ──▶ useDeleteSupplierPayment()
+  ├─ primary action "Post Payment" (draft only) ▶ ConfirmationDialog ──▶ usePostSupplierPayment()
+  └─ Allocations section (draft only add/edit/delete)
+       ├─ "Add Allocation" ─────────────────────▶ Dialog(SupplierPaymentAllocationForm) ──▶ useCreateSupplierPaymentAllocation()
+       ├─ row action "Edit" ────────────────────▶ Dialog(SupplierPaymentAllocationForm, pre-filled) ──▶ useUpdateSupplierPaymentAllocation()
+       └─ row action "Delete" ──────────────────▶ DeleteConfirmationDialog ──▶ useDeleteSupplierPaymentAllocation()
+```
+
+`SupplierPaymentForm` is the single shared header form for Create and Edit — Supplier, Payment Date, Payment Method, Amount, Reference Number, Bank Name, Remarks — same zod validation, same submit/error handling (422 → `mapServerErrorsToForm`, anything else → `toastError`) as `PaymentForm`. `useDeleteSupplierPayment` owns the entire delete outcome (invalidate `supplierPaymentKeys.lists()`, remove `supplierPaymentKeys.detail(id)`/`supplierPaymentAllocationKeys.byPayment(id)`, `toastSuccess`, navigate to `/supplier-payments`) so the Detail page's Delete action and the List page's row action behave identically, mirroring `useDeletePayment`.
+
+**Cascading invalidation on every allocation mutation.** Creating, updating, or deleting an allocation recalculates the parent payment's totals *and* the target purchase bill's `paid_amount`/`balance_amount`/`status` *and* that bill's supplier's `outstanding_amount`, all server-side in one transaction. The three allocation mutation hooks invalidate exactly `supplierPaymentKeys.detail()`, `supplierPaymentAllocationKeys.byPayment()`, and `purchaseBillKeys.detail()` (both the old and new bill, for a retargeted update) — there is deliberately **no** `supplierKeys.detail()` invalidation to match, unlike Payment Allocation's `companyKeys.detail()`: this module never caches a supplier's `outstanding_amount` anywhere (`useSupplierOptions()` only ever caches id/name pairs for the filter/selector), so there is nothing stale to invalidate on that side.
+
+Every action is permission-gated — see "Permission Model" above.
+
+### BFF Integration
+
+Same proxy pattern every prior module uses, no new mechanism: every service in this module talks only to the Next.js BFF's own routes, never the FastAPI backend directly (the browser holds no bearer token to attach — it lives in an `HttpOnly` cookie only the Next.js server can read). Every BFF route handler does nothing but call `authenticatedBackendRequest()` and forward the JSON response — no Supplier-Payment-specific auth code exists anywhere.
+
+| BFF route | Methods | Backend route |
+|---|---|---|
+| `/api/supplier-payments` | GET, POST | `/supplier-payments` |
+| `/api/supplier-payments/[id]` | GET, PUT, DELETE | `/supplier-payments/{id}` |
+| `/api/supplier-payments/[id]/post` | POST | `/supplier-payments/{id}/post` |
+| `/api/supplier-payments/[id]/allocations` | GET, POST | `/supplier-payments/{id}/allocations` |
+| `/api/supplier-payments/[id]/allocations/[allocationId]` | PUT, DELETE | `/supplier-payments/{id}/allocations/{allocation_id}` |
+| `/api/suppliers` | GET | `/suppliers` |
+| `/api/purchase` | GET | `/purchase` |
+| `/api/purchase/[id]` | GET | `/purchase/{id}` |
+
+Ten HTTP handlers across five route files for the module's own resource, one-to-one with the backend's own ten `supplier-payments` routes — no invented endpoint, no missing one. Three additional **read-only** proxy routes (`/api/suppliers`, `/api/purchase`, `/api/purchase/[id]`, plus `/api/purchase/[id]/items` added for the Purchase Bills feature's own Detail page) back this module's Supplier filter/selector and Purchase Bill selector/table, now shared with the real `features/suppliers`/`features/purchase-bills` modules (see their own sections below) rather than existing solely for this module as they originally did.
+
+### Production QA Findings (Sprint 9 Session 5)
+
+A dedicated audit pass over every file in `features/supplier-payments/` plus `app/api/supplier-payments/**` (and the module's own `app/api/purchase/**`, `app/api/suppliers/**` proxies) — no new CRUD scope, fix only what's found, mirroring the Companies/Fish/Boats/Payment modules' own closing QA-pass process.
+
+- **Lifecycle** — re-verified Draft-editable, Posted-read-only, Allocation-CRUD-draft-only, Delete-draft-only, Post-draft-only against the backend's actual `_ensure_draft`/`_ensure_draft_for_allocation` checks. All correct, no code changes required.
+- **Financial behavior** — grepped every file in the module for arithmetic on money fields; the only `Number(value)` calls found are zod `.refine()` validation checks (`> 0`) in the two form schemas, not calculations that produce a new financial value. Every allocated/unallocated/balance/status/outstanding figure displayed anywhere renders straight from a backend response via `formatCurrency`/`formatDate`, never recomputed. Supplier `outstanding_amount` specifically is never fetched, cached, or rendered anywhere in this module.
+- **Permissions** — grepped every `hasPermission()` call in the module; confirmed exactly the five codes `permissions.py` defines are used, with no invented `supplier_payment_allocation:*` code anywhere.
+- **Accessibility** — Dialogs (Radix-based) inherit focus trap/Escape-to-close/return-focus-to-trigger by construction; every form field's `aria-invalid`/`aria-describedby` comes from `FormField`'s shared render props; every spinner carries `motion-reduce:animate-none`. No custom widget was built that bypasses any of this. No gaps found.
+- **Performance** — query keys are stable, content-hashed factories (`supplierPaymentKeys`/`supplierPaymentAllocationKeys`/`purchaseBillKeys`); `useSupplierPaymentAllocations`/`useSupplierPaymentAllocation` deliberately share one queryKey/queryFn so TanStack Query dedupes the request; the Allocation table's row-resolution queries and the Allocation form's selector queries share the exact same `purchaseBillKeys.detail(id)` key, so editing an already-resolved allocation reuses the cached bill instead of refetching it; columns and row-actions are memoized (`useMemo`/`useCallback`) on both the List and Allocations tables; no route wrapper carries an unnecessary `"use client"`.
+- **Cleanup** — no `console.log`/`TODO`/`FIXME` found anywhere in the module (grepped). Two real issues found and fixed: (1) two docstrings (`supplier-payment-service.ts`, `supplier-payment-detail-page.tsx`) incorrectly claimed the backend router "has exactly nine routes" — a straight miscount, it has ten (create/list/get/update/delete/create_allocation/list_allocations/update_allocation/delete_allocation/post), matching Payment's own router exactly; (2) `app/api/purchase/[id]/route.ts`'s docstring referenced a `use-purchase-bill.ts` hook that was never built — the actual lookup logic lives in `purchase-bill-service.ts`'s `getPurchaseBill`, consumed inline by the Allocation table's `useAllocationPurchaseBills` and the Allocation form's `PurchaseBillSelectorField`.
+- **Duplication reviewed, not extracted**: `supplier-payment-form-schema.ts` and `supplier-payment-allocation-form.tsx` each declare an identical `AMOUNT_PATTERN` regex (`NUMERIC(14,2)`), and `supplier-payment-form.tsx` duplicates the `toDateOrUndefined`/`toIsoDateString` helpers already present in `payment-form.tsx` and several other modules' own form components. Both are the codebase's own established, deliberate per-file colocation convention (already flagged as such in the Payment module's own QA pass) rather than something introduced here — extracting a shared helper now would be a new abstraction this session's scope doesn't call for.
+- **Not done**: no live browser/screen-reader session was run for this pass — findings came from static code review of every file in `features/supplier-payments/` plus the module's BFF routes, not fresh empirical testing of every breakpoint/theme combination.
+
+### Extension Guidelines
+
+For the next module that needs to reference an entity with no frontend feature of its own yet (the situation this module hit twice, for Suppliers and Purchase Bills):
+
+1. **Don't stand up a full feature module for one selector/filter.** A minimal, local, read-only type + service (`purchase-bill.ts`/`purchase-bill-service.ts`, `use-supplier-options.ts`) that only carries the fields actually rendered is the right scope when the only consumer is a dropdown or a reference-resolution lookup — building out full CRUD for an entity nothing in the current module needs to mutate is scope creep, not architecture.
+2. **A minimal BFF proxy for a real, already-implemented backend endpoint is not "inventing an endpoint.**" `/api/suppliers` and `/api/purchase` proxy real `GET /suppliers`/`GET /purchase` routes that already exist and are already permission-gated on the backend — adding a thin `authenticatedBackendRequest()` pass-through for them is the same zero-logic proxy pattern every other BFF route in this codebase uses, not new backend surface.
+3. **Share query keys between a selector's own lookups and any table that resolves the same entity by id** (`purchaseBillKeys.detail(id)`, used by both `PurchaseBillSelectorField` and `useAllocationPurchaseBills`) — this is what makes editing an already-resolved row reuse the cache instead of refetching, the same technique Payment Allocation's `invoiceKeys.detail()` established.
+4. **When a mutation cascades into a module you have no detail-cache for** (this module never caches a Supplier's `outstanding_amount`), don't invalidate a query key that was never populated — invalidating a key nothing ever fetched is a no-op that only adds false confidence; the correct fix is recognizing there's nothing to invalidate on that side, not adding one anyway "to be safe."
+5. **Verify route/endpoint counts by grepping `@router.` decorators, not by re-reading and eyeballing them** — this session's own QA pass caught a miscounted "nine routes" claim (actually ten) that had propagated into two separate docstrings without ever being wrong about *behavior*, only the count.
+6. **Run the same closing QA pass** (lifecycle re-verification, financial-calculation grep, permission grep, accessibility/performance review, cleanup) before calling the module done — this session's findings (two real documentation defects, zero real behavioral bugs) show the value is largely in *catching drift*, not first-time defects, once a module is already built by mirroring a hardened pattern.
+
+### Known Backend Limitations
+
+Verified by grepping `@router.` decorators in `app/modules/supplier_payments/router.py` in full (exactly ten routes) rather than assumed — none of the four below exist anywhere in the backend, and the frontend does not pretend otherwise:
+
+- **No Cancel endpoint.** `SupplierPaymentStatus.CANCELLED` exists in the backend's enum, but no route transitions a payment to it. `SUPPLIER_PAYMENT_STATUS_BADGE_VARIANT`/`_LABELS` still handle the value (it must be exhaustively covered in TypeScript), but nothing in the UI can reach it.
+- **No Refund endpoint.** No route, no concept — consistent with CLAUDE.md's "financial corrections use credit notes/reversal entries," not a refund model.
+- **No Ledger posting.** `SupplierPaymentService.post()`'s own source has explicit `TODO(future sprint)` comments for ledger entries, receipt generation, and outbox events — not implemented, not stubbed, not simulated client-side.
+- **No Bank reconciliation.** No `cheque_status`/`cleared_at`-style fields exist on `SupplierPayment` today, and no UI references them.
+
+Any of the four becoming real backend endpoints is a prerequisite for the matching frontend work — not something this module can build ahead of the API that would back it.
+
+## Suppliers Module — Complete
+
+Full CRUD (List/Create/Edit/Detail/Delete) against the live backend, `features/suppliers/` (mirrors `app/modules/suppliers/` on the backend), built by deliberately mirroring the Companies module architecture exactly — a Supplier is a flat master-data record, the same shape as Company, with no state machine and no nested sub-resource of its own.
+
+### Architecture
+
+```
+features/suppliers/
+  types/supplier.ts            # BackendSupplier (snake_case) + Supplier (camelCase) + mapBackendSupplier()
+                                # + SupplierCreateRequest/SupplierUpdateRequest/SupplierListParams
+  services/supplier-service.ts # listSuppliers/getSupplier/createSupplier/updateSupplier/deleteSupplier
+  hooks/                       # useSuppliers, useSupplier, useSupplierFilters (URL state),
+                                # useCreateSupplier, useUpdateSupplier, useDeleteSupplier
+  schemas/
+    supplier-filters.ts        # SupplierFilters shape + toSupplierListParams() mapper
+    supplier-form-schema.ts    # zod schema, SupplierFormValues, form <-> Supplier/request payload mappers
+  constants/                   # supplier-status.ts, query-keys.ts (supplierKeys)
+  components/                  # supplier-columns.tsx, supplier-row-actions.tsx, supplier-form.tsx
+  pages/                       # supplier-list-page.tsx, supplier-detail-page.tsx,
+                                # supplier-create-page.tsx, supplier-edit-page.tsx
+  index.ts                     # barrel — the module's public surface
+```
+
+`app/(authenticated)/suppliers/{page.tsx, new/page.tsx, [id]/page.tsx, [id]/edit/page.tsx}` are thin, server-rendered route wrappers — no `"use client"`, no logic — that just render the matching `features/suppliers/pages/*` component, same as every prior module. `app/api/suppliers/{route.ts, [id]/route.ts}` proxy the backend's five CRUD routes one-to-one via `authenticatedBackendRequest()`.
+
+**Field scope deliberately mirrors `CompanyForm`'s own deliberate subset**, translated to Supplier's actual (smaller) schema: identity (name, code) and contact/address fields (GSTIN, phone, email, address, city, state, country) only. `legal_name`/`contact_person`/`credit_days`/`opening_balance` are deferred, the same category of fields `CompanyForm` itself left out of its own form. **There is no Status field** (unlike `CompanyForm`) — `SupplierCreateRequest`/`SupplierUpdateRequest` never accept `status` at all (always `active` on create, server-owned thereafter, per the backend's own docstring), so the form doesn't offer a field the backend would silently ignore.
+
+### Permission Model
+
+Four permission codes (`app/modules/suppliers/permissions.py`) — one fewer than Company's, since Supplier has no `outstanding_amount`-adjusting lifecycle action of its own to gate:
+
+| Code | Gates |
+|---|---|
+| `supplier:view` | Reaching the List/Detail pages; the row-level View action; whether a List row click navigates. |
+| `supplier:create` | "New Supplier" (header + empty-state CTA). |
+| `supplier:edit` | Row/Detail-page Edit action. |
+| `supplier:delete` | Row/Detail-page Delete action. |
+
+### Reused elsewhere
+
+`useSupplierOptions()`-style lookups in **two other modules** now import directly from this feature's public surface (`supplierService`/`supplierKeys`, `@/features/suppliers`) rather than each maintaining its own copy: the Supplier Payments module's Supplier filter/selector, and the Purchase Bills module's Supplier filter/column resolution — mirroring exactly how `useCompanyOptions()` in Invoices/Payments reuses `@/features/companies`.
+
+## Purchase Bills Module — List, Create, Edit, Detail, Post
+
+`features/purchase-bills/` (mirrors `app/modules/purchase/` on the backend) — List/Create/Edit/Detail against the live backend, plus full line-item CRUD and a Post lifecycle action on the Detail page, mirroring the Invoices module's own shape (header CRUD + Dialog-based item CRUD + Issue) closely. **Delete is deliberately not wired up** — that remains separate, later work; the backend already implements it, but it wasn't needed to unblock the downstream workflow the way Post was (see below).
+
+**Why Post was added in a follow-up pass, not the original scope**: a purchase bill created via `PurchaseBillForm` starts `draft`, and the Supplier Payment Allocation selector only offers `posted`/`partially_paid` bills (the backend's own allocation rule) — without Post, a newly created bill could never be allocated against, a dead end discovered only once the two modules were used together end-to-end. This is the reason "run the actual UI, not just the type-checker" matters: lint/type-check/build all passed the whole time this gap existed.
+
+### Architecture
+
+```
+features/purchase-bills/
+  types/
+    purchase-bill.ts          # BackendPurchaseBill (full backend shape) + PurchaseBill + mapBackendPurchaseBill()
+                               # + PurchaseBillCreateRequest/PurchaseBillUpdateRequest
+    purchase-bill-item.ts     # BackendPurchaseBillItem + PurchaseBillItem + mapBackendPurchaseBillItem()
+                               # + PurchaseBillItemCreateRequest/PurchaseBillItemUpdateRequest
+  services/
+    purchase-bill-service.ts      # listPurchaseBills/getPurchaseBill/createPurchaseBill/updatePurchaseBill
+    purchase-bill-item-service.ts # listPurchaseBillItems/createPurchaseBillItem/updatePurchaseBillItem/deletePurchaseBillItem
+  hooks/                       # usePurchaseBills, usePurchaseBill, usePurchaseBillFilters (URL state),
+                                # useCreatePurchaseBill, useUpdatePurchaseBill, usePostPurchaseBill,
+                                # usePurchaseBillItems, usePurchaseBillItem, useCreatePurchaseBillItem,
+                                # useUpdatePurchaseBillItem, useDeletePurchaseBillItem,
+                                # useSupplierOptions (reuses @/features/suppliers)
+  schemas/
+    purchase-bill-filters.ts       # PurchaseBillFilters shape + toPurchaseBillListParams() mapper
+    purchase-bill-form-schema.ts   # zod schema, PurchaseBillFormValues, form <-> PurchaseBill/request payload mappers
+    purchase-bill-item-form-schema.ts # zod schema, PurchaseBillItemFormValues, same mapper shape for items
+  constants/                   # purchase-bill-status.ts, query-keys.ts (purchaseBillKeys, purchaseBillItemKeys)
+  components/                  # purchase-bill-columns.tsx, purchase-bill-row-actions.tsx (View/Edit),
+                                # purchase-bill-form.tsx, purchase-bill-item-columns.tsx,
+                                # purchase-bill-item-row-actions.tsx, purchase-bill-item-form.tsx,
+                                # purchase-bill-item-table.tsx (Dialog-based Add/Edit/Delete)
+  pages/                       # purchase-bill-list-page.tsx, purchase-bill-detail-page.tsx,
+                                # purchase-bill-create-page.tsx, purchase-bill-edit-page.tsx
+  index.ts                     # barrel — the module's public surface
+```
+
+`app/(authenticated)/purchase-bills/{page.tsx, new/page.tsx, [id]/page.tsx, [id]/edit/page.tsx}` are thin, server-rendered route wrappers — no `"use client"`, no logic. BFF: `/api/purchase` (GET/POST), `/api/purchase/[id]` (GET/PUT), `/api/purchase/[id]/post` (POST), `/api/purchase/[id]/items` (GET/POST), `/api/purchase/[id]/items/[itemId]` (PUT/DELETE) — the first two originally added read-only for Supplier Payments' Allocation selector, now extended with the write methods this module needed; no DELETE on the bill itself yet.
+
+**No Bill Number field anywhere in the header form.** `bill_number` is assigned only at posting (not yet wired up on this frontend) — never client-supplied, never present in `PurchaseBillCreateRequest`/`PurchaseBillUpdateRequest`. **Unlike `InvoiceForm`, there is no Transport Charge/Other Charge field** — the backend does not accept either field on this resource at all (`PurchaseBillCreateRequest`'s own docstring is explicit: "Unlike InvoiceCreateRequest, transport_charge/other_charge are NOT client-settable"); every financial field starts at 0 and is computed once line items exist.
+
+**Purchase Bill Items have no Fish/Trip Catch link** — unlike `InvoiceItemForm`, `PurchaseBillItemForm` is a plain set of fields (Description, Quantity, Unit, Rate, Discount %, Tax %) with no selector, since a purchase line has no connection to a sold-fish master or a trip catch. `description` is **required** here (unlike Invoice Item's optional description) — the backend's own `PurchaseBillItemCreateRequest` requires it even though the underlying column stays nullable. Every calculated field (discount_amount/taxable_amount/tax_amount/line_total, and the bill's own subtotal/discount/taxable/tax/total/balance amounts) is server-computed by `app.modules.purchase.domain.totals` and only ever rendered read-only.
+
+**List row actions** (`usePurchaseBillRowActions`) offer View (always) and Edit (draft-only, `purchase:edit`) — no Delete/Post row action; Post lives on the Detail page only, mirroring how Invoice's Issue action is Detail-page-only. The Detail page shows Post as its primary action (draft-only, `purchase:post`, behind a `ConfirmationDialog`) and Edit as a secondary action under the same draft-only gate, plus the full Items CRUD section (`PurchaseBillItemTable`, Dialog-based Add/Edit/Delete, mirroring `InvoiceItemTable` exactly minus the Fish/Trip Catch selector).
+
+**Posting** (`POST /purchase/{id}/post`, `purchase:post`) is the module's one true business transaction, confirmed from `PurchaseService.post` (row-locked `SELECT ... FOR UPDATE`, one transaction): requires `draft` status and at least one item (422 `PURCHASE_BILL_EMPTY` otherwise), recalculates all totals from current items, assigns `bill_number` via a locked per-tenant/fiscal-year sequence (`PUR/{fiscal_year}/{seq}`), and increases the billing supplier's `outstanding_amount` by `balance_amount` — unlike Supplier Payment's own `post` (which touches nothing outside itself), this one has a real side effect on Supplier data, the same way Invoice's `issue` reaches into Company, so `usePostPurchaseBill` additionally invalidates `supplierKeys.detail(supplierId)` (`@/features/suppliers`).
+
+### Extension Guidelines
+
+For whichever future session adds Delete to this module:
+
+1. **Mirror `useDeleteInvoice`'s shape** — `useDeletePurchaseBill` should own the full delete outcome (invalidate lists, remove the detail query, toast, navigate away).
+2. **Verify the exact permission code** (`purchase:delete` already exists in `app/modules/purchase/permissions.py`, unused by the frontend until this work lands) before wiring any button to it.
+3. **Add the missing BFF `DELETE` handler** to the existing `/api/purchase/[id]/route.ts` - the same zero-logic proxy pattern every route in this module already uses.
+4. **Before shipping any lifecycle/allocation feature that depends on another module's status transitions** (the way Supplier Payment Allocation depends on Purchase Bills being `posted`), actually exercise the two modules together in the running app - a missing Post action here was invisible to lint/type-check/build and only surfaced as a real dead end once a user tried the end-to-end flow.
+
 ## Current Status
 
-**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and a finalization pass. **Sprint 3 (Sessions 1–5) — complete** — the Companies module: full CRUD (List/Create/Edit/Detail/Delete) against the live backend, URL-synced list state, UX polish, and a final QA/hardening pass — see "Companies Module" above. **Sprint 4 (Sessions 1–5) — complete** — the Fish module: full CRUD built by deliberately mirroring the Companies architecture, URL-synced list state, a production-polish pass, and a final QA/hardening pass — see "Fish Module" above. **Sprint 5 (Sessions 1–6) — complete** — the Boat module: full CRUD, URL-synced list state, a production-polish pass, a final QA/hardening pass, and a Session 6 business-model correction (removed an incorrectly-added `company_id` boat-ownership field — a boat belongs to the tenant only) — see "Boat Module" above. **Sprints 6–7** shipped the Trips (with Trip Catch/Trip Expense sub-resources) and Invoices modules against the live backend — both are in active use by later modules (Payment Allocation reuses `invoiceService`/`invoiceKeys` directly, per "Payment Module" below) but do not yet have their own dedicated sections in this README; that documentation gap predates Sprint 8 and is called out here rather than silently left unmentioned. **Sprint 8 (Sessions 1–5) — complete** — the Customer Payments module: full lifecycle (List/Create/Edit/Detail/Allocate/Post/Delete) against the live backend, the first module with a real state machine (`draft → posted`) and a cross-module-cascading nested sub-resource (allocations against Invoices, cascading into Invoice and Company balances), plus a final QA/hardening pass — see "Payment Module" above. The Companies module proved the reusable library out end-to-end; Fish proved the *pattern itself* replicates to a second module with a different (coarser) permission model; Boats proved that even a completed, QA-passed module can carry a business-model defect that only a domain-level review catches, not a code-level one; Payments proved the pattern extends to a module with genuine lifecycle state and cross-module financial cascades, with the backend remaining the sole source of truth for every calculation throughout.
+**Sprint 1 (Sessions 1–5)** — engineering foundation, authentication, the application shell, global UX infrastructure, and reusable page templates. **Sprint 2 (Sessions 1–5)** — the full reusable Component Library: Enterprise Data Table, Form Components, Filtering/Search/Pagination, Charts & Reporting, and a finalization pass. **Sprint 3 (Sessions 1–5) — complete** — the Companies module: full CRUD (List/Create/Edit/Detail/Delete) against the live backend, URL-synced list state, UX polish, and a final QA/hardening pass — see "Companies Module" above. **Sprint 4 (Sessions 1–5) — complete** — the Fish module: full CRUD built by deliberately mirroring the Companies architecture, URL-synced list state, a production-polish pass, and a final QA/hardening pass — see "Fish Module" above. **Sprint 5 (Sessions 1–6) — complete** — the Boat module: full CRUD, URL-synced list state, a production-polish pass, a final QA/hardening pass, and a Session 6 business-model correction (removed an incorrectly-added `company_id` boat-ownership field — a boat belongs to the tenant only) — see "Boat Module" above. **Sprints 6–7** shipped the Trips (with Trip Catch/Trip Expense sub-resources) and Invoices modules against the live backend — both are in active use by later modules (Payment Allocation reuses `invoiceService`/`invoiceKeys` directly, per "Payment Module" below) but do not yet have their own dedicated sections in this README; that documentation gap predates Sprint 8 and is called out here rather than silently left unmentioned. **Sprint 8 (Sessions 1–5) — complete** — the Customer Payments module: full lifecycle (List/Create/Edit/Detail/Allocate/Post/Delete) against the live backend, the first module with a real state machine (`draft → posted`) and a cross-module-cascading nested sub-resource (allocations against Invoices, cascading into Invoice and Company balances), plus a final QA/hardening pass — see "Payment Module" above. **Sprint 9 (Sessions 1–5) — complete** — the Supplier Payments module: the buy-side mirror of Customer Payments, same full lifecycle (List/Create/Edit/Detail/Allocate/Post/Delete) against the live backend, allocations against Purchase Bills cascading into Purchase Bill and Supplier balances, plus a final QA/hardening pass — see "Supplier Payment Module" above. Unlike every prior module, this one initially had no existing frontend feature to resolve its foreign keys through (no `suppliers`/`purchase-bills` feature existed yet), so it carried its own small, local, read-only lookups rather than reusing a sibling feature the way Payment Allocation reused Invoices/Companies. **Post-Sprint-9 hardening** then built both real features it had been standing in for — the **Suppliers module** (full CRUD, mirroring Companies exactly — see "Suppliers Module" above) and the **Purchase Bills module** (List + Detail, deliberately read-only — see "Purchase Bills Module" above) — and retired Supplier Payments' own local lookups in favor of them, completing the same "reuse a sibling feature" pattern every other module already followed. The Companies module proved the reusable library out end-to-end; Fish proved the *pattern itself* replicates to a second module with a different (coarser) permission model; Boats proved that even a completed, QA-passed module can carry a business-model defect that only a domain-level review catches, not a code-level one; Payments proved the pattern extends to a module with genuine lifecycle state and cross-module financial cascades; Supplier Payments proved the same pattern extends cleanly to the buy-side even before its sibling features existed, and cleanly retires its own stopgaps once they do, with the backend remaining the sole source of truth for every calculation throughout.
 
 - Project scaffold, TypeScript strict mode, ESLint, Tailwind v4.
 - shadcn/ui configured (New York style, Slate base color, CSS variables).
@@ -941,5 +1237,8 @@ Any of the four becoming real backend endpoints is a prerequisite for the matchi
 - The Boat module (`src/features/boats/`) — see "Boat Module" above. No new dependencies; proves the pattern extends to a module with a genuinely tri-state boolean filter (`insuranceExpired`/`licenseExpired`). Two rounds of hardening (production polish + final QA) complete, same bar as Companies/Fish, plus a Session 6 business-model correction that removed an incorrect `company_id` foreign key added in Sessions 1–5 — a boat is owned by the tenant only, never by a `Company` (a customer) — see "Business Model Correction" above.
 - The Trips module (`src/features/trips/`, including Trip Catch/Trip Expense sub-resources) and the Invoices module (`src/features/invoices/`, including Invoice Items) — both shipped (Sprints 6–7) and in active use (Payment Allocation's Invoice selector and cascading invalidation both reuse `invoiceService`/`invoiceKeys` directly), but neither has its own dedicated architecture section in this README yet — a pre-existing documentation gap, not a Sprint 8 regression.
 - The Customer Payments module (`src/features/payments/`) — see "Payment Module" above. No new dependencies. The first module built with a genuine backend state machine (`draft → posted`) and a nested sub-resource (allocations) whose mutations cascade into two other modules' data (Invoice, Company) — every cascade is invalidated via TanStack Query, never recomputed client-side. Known backend limitations (no Cancel/Refund endpoint, no ledger posting, no bank reconciliation) are documented rather than worked around.
+- The Supplier Payments module (`src/features/supplier-payments/`) — see "Supplier Payment Module" above. No new dependencies. Mirrors the Customer Payments module's architecture exactly (same state machine, same allocation-CRUD-on-Detail-page shape, same posting/deletion rules). Its own local Supplier/Purchase Bill lookups have since been retired in favor of the real `suppliers`/`purchase-bills` features below. Known backend limitations (no Cancel/Refund endpoint, no ledger posting, no bank reconciliation) are documented rather than worked around, same as Payments.
+- The Suppliers module (`src/features/suppliers/`) — see "Suppliers Module" above. No new dependencies. Full CRUD built by mirroring the Companies module exactly; now the shared Supplier lookup for both Supplier Payments and Purchase Bills.
+- The Purchase Bills module (`src/features/purchase-bills/`) — see "Purchase Bills Module" above. No new dependencies. List/Create/Edit/Detail plus full line-item CRUD and a Post lifecycle action on the Detail page, mirroring Invoices' own header-form + Dialog-based item-CRUD + Issue shape; Delete remains separate, later work. Also the shared Purchase Bill lookup for Supplier Payments' Allocation UI - Post specifically exists to unblock that dependency, since an unposted bill was invisible to the Allocation selector.
 
-Next up: whichever module `08_FRONTEND_IMPLEMENTATION_PLAN.md` sequences after Payments, following the same pattern the Companies, Fish, Boat, and Payment modules now establish — plus, opportunistically, backfilling the still-missing Trips/Invoices architecture sections noted above.
+Next up: whichever module `08_FRONTEND_IMPLEMENTATION_PLAN.md` sequences next, following the same pattern the Companies, Fish, Boat, Payment, Supplier Payment, Suppliers, and Purchase Bills modules now establish — plus, opportunistically, backfilling the still-missing Trips/Invoices architecture sections noted above, and eventually building out Purchase Bills' own Create/Edit/Post CRUD (see that module's own Extension Guidelines).
