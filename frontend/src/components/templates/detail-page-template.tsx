@@ -14,6 +14,8 @@ interface DetailPageTemplateProps {
   badge?: ReactNode;
   primaryAction?: PageAction;
   secondaryActions?: PageAction[];
+  /** e.g. an `ExportMenu` ("Download Statement") — rendered left of the secondary actions (TASKS.md Sprint 11 Session 5 Phase C). */
+  exportMenu?: ReactNode;
   isLoading?: boolean;
   /** A Not Found or a general load-failure — `05_PAGE_CATALOG.md` §0 distinguishes them by copy, not layout. */
   error?: { title: string; description?: string; onRetry?: () => void } | null;
@@ -36,6 +38,7 @@ export function DetailPageTemplate({
   badge,
   primaryAction,
   secondaryActions,
+  exportMenu,
   isLoading = false,
   error = null,
   children,
@@ -47,7 +50,12 @@ export function DetailPageTemplate({
         description={description}
         icon={icon}
         badge={badge}
-        actions={<PageActions primary={primaryAction} secondary={secondaryActions} />}
+        actions={
+          <>
+            {exportMenu}
+            <PageActions primary={primaryAction} secondary={secondaryActions} />
+          </>
+        }
       />
 
       {error ? (

@@ -9,6 +9,7 @@ from app.modules.fish.router import router as fish_router
 from app.modules.invoices.router import router as invoices_router
 from app.modules.payments.router import router as payments_router
 from app.modules.purchase.router import router as purchase_router
+from app.modules.reports.router import router as reports_router
 from app.modules.supplier_payments.router import router as supplier_payments_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.modules.trip_catches.router import router as trip_catches_router
@@ -30,3 +31,4 @@ api_v1_router.include_router(suppliers_router)
 api_v1_router.include_router(purchase_router)
 api_v1_router.include_router(supplier_payments_router)
 api_v1_router.include_router(dashboard_router)
+api_v1_router.include_router(reports_router)

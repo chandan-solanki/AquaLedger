@@ -50,10 +50,18 @@ async function parseJsonBody<T>(response: Response): Promise<T> {
  * (`lib/auth/server-session.ts`), extended to business-data BFF routes
  * (companies, and every module after it) since the browser never holds a
  * bearer token to attach itself (ARCHITECTURE.md §1.2, §8.1).
+ *
+ * `parse` lets a caller consume the successful response differently -
+ * `authenticatedBackendRequest` parses it as JSON (the shape every
+ * existing BFF route needs); `authenticatedBackendBinaryRequest` returns
+ * the raw `Response` instead (a report export's PDF/Excel/CSV bytes
+ * aren't JSON) - both share this one retry/refresh implementation rather
+ * than duplicating it.
  */
-export async function authenticatedBackendRequest<T>(
+async function performAuthenticatedRequest<T>(
   path: string,
-  init: AuthenticatedBackendRequestInit = {}
+  init: AuthenticatedBackendRequestInit,
+  parse: (response: Response) => Promise<T>
 ): Promise<T> {
   const accessToken = await getAccessToken();
 
@@ -66,7 +74,7 @@ export async function authenticatedBackendRequest<T>(
         buildNetworkError(cause instanceof Error ? cause.message : "Unable to reach the backend.")
       );
     }
-    if (response.ok) return await parseJsonBody<T>(response);
+    if (response.ok) return await parse(response);
     if (response.status !== 401) throw await toBackendAuthError(response);
   }
 
@@ -105,5 +113,24 @@ export async function authenticatedBackendRequest<T>(
     if (retryResponse.status === 401) await clearSessionCookies();
     throw await toBackendAuthError(retryResponse);
   }
-  return await parseJsonBody<T>(retryResponse);
+  return await parse(retryResponse);
+}
+
+export async function authenticatedBackendRequest<T>(
+  path: string,
+  init: AuthenticatedBackendRequestInit = {}
+): Promise<T> {
+  return performAuthenticatedRequest(path, init, parseJsonBody<T>);
+}
+
+/** Same auth/refresh/retry contract as `authenticatedBackendRequest`, but
+ * returns the raw successful `Response` instead of parsing it as JSON -
+ * for binary downloads (report export's PDF/Excel/CSV), whose caller
+ * needs the response body as bytes plus its Content-Type/Content-
+ * Disposition headers, not a parsed object. */
+export async function authenticatedBackendBinaryRequest(
+  path: string,
+  init: AuthenticatedBackendRequestInit = {}
+): Promise<Response> {
+  return performAuthenticatedRequest(path, init, async (response) => response);
 }

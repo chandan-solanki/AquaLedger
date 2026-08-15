@@ -631,7 +631,7 @@ class DashboardRepository:
     async def get_top_fish_widget(
         self, tenant_id: uuid.UUID, *, limit: int
     ) -> list[tuple[uuid.UUID, str, Decimal, Decimal]]:
-        """"WIDGET 3 Top Fish" - the same non-draft/cancelled, grouped/
+        """ "WIDGET 3 Top Fish" - the same non-draft/cancelled, grouped/
         ordered/limited query as get_top_fish_by_sales (Session 3's chart),
         kept as its own method rather than reused because this widget also
         needs `fish_id` for drill-down navigation, which the chart series

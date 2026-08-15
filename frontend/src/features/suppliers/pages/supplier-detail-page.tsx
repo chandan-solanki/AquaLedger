@@ -9,6 +9,7 @@ import { InfoCard } from "@/components/data-display/info-card";
 import { DeleteConfirmationDialog } from "@/components/feedback/dialogs/delete-confirmation-dialog";
 import { ErrorState } from "@/components/feedback/error-state";
 import { SectionHeader } from "@/components/layout/section-header";
+import { ExportMenu } from "@/components/reports";
 import { DetailPageTemplate } from "@/components/templates/detail-page-template";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/features/auth/hooks/use-permissions";
@@ -18,6 +19,7 @@ import {
 } from "@/features/suppliers/constants/supplier-status";
 import { useDeleteSupplier } from "@/features/suppliers/hooks/use-delete-supplier";
 import { useSupplier } from "@/features/suppliers/hooks/use-supplier";
+import { triggerStatementDownload } from "@/features/reports/utils/trigger-report-download";
 import { normalizeApiError } from "@/utils/api-error";
 import { formatDateTime } from "@/utils/format-date";
 
@@ -70,6 +72,18 @@ export function SupplierDetailPage() {
         supplier && hasPermission("supplier:delete")
           ? [{ label: "Delete", icon: Trash2, onClick: () => setIsDeleteDialogOpen(true) }]
           : undefined
+      }
+      exportMenu={
+        supplier && hasPermission("reports:view") ? (
+          <ExportMenu
+            label="Download Statement"
+            formats={["excel", "pdf"]}
+            onExport={(format) => {
+              if (format === "csv") return;
+              triggerStatementDownload("supplier", format, { supplier_id: supplier.id });
+            }}
+          />
+        ) : undefined
       }
       isLoading={supplierQuery.isLoading}
       error={

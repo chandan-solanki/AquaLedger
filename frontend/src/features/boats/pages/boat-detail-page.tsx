@@ -12,7 +12,9 @@ import { ErrorState } from "@/components/feedback/error-state";
 import { SectionHeader } from "@/components/layout/section-header";
 import { DetailPageTemplate } from "@/components/templates/detail-page-template";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePermissions } from "@/features/auth/hooks/use-permissions";
+import { BoatProfitabilityTab } from "@/features/boats/components/boat-profitability-tab";
 import { BOAT_STATUS_BADGE_VARIANT, BOAT_STATUS_LABELS, toBoatStatus } from "@/features/boats/constants/boat-status";
 import { useBoat } from "@/features/boats/hooks/use-boat";
 import { useDeleteBoat } from "@/features/boats/hooks/use-delete-boat";
@@ -81,51 +83,74 @@ export function BoatDetailPage() {
       }
     >
       {boat && (
-        <div className="space-y-6">
-          <SectionHeader title="Boat Information" />
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <InfoCard title="Details">
-              <DescriptionList
-                items={[
-                  { term: "Boat Name", details: boat.name },
-                  { term: "Boat Code", details: boat.code },
-                  { term: "Registration Number", details: boat.registrationNumber },
-                  { term: "Boat Type", details: boat.boatType ?? "—" },
-                  { term: "Capacity", details: boat.capacityKg ? `${formatQuantity(boat.capacityKg)} kg` : "—" },
-                  { term: "Status", details: status ? BOAT_STATUS_LABELS[status] : "—" },
-                  { term: "Created At", details: formatDateTime(boat.createdAt) },
-                  { term: "Updated At", details: formatDateTime(boat.updatedAt) },
-                ]}
-              />
-            </InfoCard>
-
-            <InfoCard title="Engine & Compliance">
-              <DescriptionList
-                items={[
-                  { term: "Engine Number", details: boat.engineNumber ?? "—" },
-                  { term: "Engine Power", details: boat.engineHp != null ? `${boat.engineHp} HP` : "—" },
-                  { term: "Captain Name", details: boat.captainName ?? "—" },
-                  { term: "Captain Phone", details: boat.captainPhone ?? "—" },
-                  { term: "License Number", details: boat.licenseNumber ?? "—" },
-                  { term: "License Expiry", details: boat.licenseExpiry ? formatDate(boat.licenseExpiry) : "—" },
-                  {
-                    term: "Insurance Expiry",
-                    details: boat.insuranceExpiry ? formatDate(boat.insuranceExpiry) : "—",
-                  },
-                ]}
-              />
-            </InfoCard>
-          </div>
-
-          <InfoCard title="Notes">
-            {boat.notes ? (
-              <p className="text-sm whitespace-pre-wrap">{boat.notes}</p>
-            ) : (
-              <EmptyState title="No notes added" description="Notes for this boat will appear here." />
+        <Tabs defaultValue="overview">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            {hasPermission("reports:view") && (
+              <TabsTrigger value="profitability">Profitability</TabsTrigger>
             )}
-          </InfoCard>
-        </div>
+          </TabsList>
+
+          <TabsContent value="overview">
+            <div className="space-y-6">
+              <SectionHeader title="Boat Information" />
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <InfoCard title="Details">
+                  <DescriptionList
+                    items={[
+                      { term: "Boat Name", details: boat.name },
+                      { term: "Boat Code", details: boat.code },
+                      { term: "Registration Number", details: boat.registrationNumber },
+                      { term: "Boat Type", details: boat.boatType ?? "—" },
+                      {
+                        term: "Capacity",
+                        details: boat.capacityKg ? `${formatQuantity(boat.capacityKg)} kg` : "—",
+                      },
+                      { term: "Status", details: status ? BOAT_STATUS_LABELS[status] : "—" },
+                      { term: "Created At", details: formatDateTime(boat.createdAt) },
+                      { term: "Updated At", details: formatDateTime(boat.updatedAt) },
+                    ]}
+                  />
+                </InfoCard>
+
+                <InfoCard title="Engine & Compliance">
+                  <DescriptionList
+                    items={[
+                      { term: "Engine Number", details: boat.engineNumber ?? "—" },
+                      { term: "Engine Power", details: boat.engineHp != null ? `${boat.engineHp} HP` : "—" },
+                      { term: "Captain Name", details: boat.captainName ?? "—" },
+                      { term: "Captain Phone", details: boat.captainPhone ?? "—" },
+                      { term: "License Number", details: boat.licenseNumber ?? "—" },
+                      {
+                        term: "License Expiry",
+                        details: boat.licenseExpiry ? formatDate(boat.licenseExpiry) : "—",
+                      },
+                      {
+                        term: "Insurance Expiry",
+                        details: boat.insuranceExpiry ? formatDate(boat.insuranceExpiry) : "—",
+                      },
+                    ]}
+                  />
+                </InfoCard>
+              </div>
+
+              <InfoCard title="Notes">
+                {boat.notes ? (
+                  <p className="text-sm whitespace-pre-wrap">{boat.notes}</p>
+                ) : (
+                  <EmptyState title="No notes added" description="Notes for this boat will appear here." />
+                )}
+              </InfoCard>
+            </div>
+          </TabsContent>
+
+          {hasPermission("reports:view") && (
+            <TabsContent value="profitability">
+              <BoatProfitabilityTab boatId={boat.id} />
+            </TabsContent>
+          )}
+        </Tabs>
       )}
 
       {boat && (

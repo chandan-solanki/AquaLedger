@@ -1722,6 +1722,108 @@ Partial indexes (`WHERE deleted_at IS NULL`, `WHERE status IN (…)`) are used h
 
 ---
 
+## 41. Reports & Export Architecture
+
+*As-built (Sprint 11), documented here because §7/§13's original blueprint (an async, job-queued `POST /reports/export → 202 + job_id`) predates this module and was superseded during implementation — every report/statement renders synchronously in well under a second, so the job-queue indirection was never worth its complexity. This section is the authoritative description of what actually shipped.*
+
+### 41.1 Reports Module
+
+`app/modules/reports/` — read-only, no owned tables (mirrors `dashboard`'s own precedent: a module can legitimately reach across other modules' ORM models for aggregation when its job *is* aggregation, per §2's carve-out). Same Repository → Service → Router layering as every other module; `ReportsRepository` is the only place SQL is written.
+
+**9 reports:** Customer Ledger, Supplier Ledger, Sales Report, Purchase Report, Outstanding Report, Aging Report, Trip Profitability, Boat Profitability, Fish Sales Analytics.
+**2 statements:** Customer Statement, Supplier Statement — formal documents built *from* the Customer/Supplier Ledger's own data, never a separate calculation (§41.3).
+
+Every report's `summary` is computed server-side over the full filtered result set, never just the current page — the frontend never re-derives a financial figure, matching the "backend owns financial calculations" rule already established for invoices/payments.
+
+### 41.2 Shared Report Export Engine
+
+`app/core/report_export/` — a self-contained engine that knows the *shape* of an exportable document, never the meaning of any specific report. It has no imports from `app.modules.reports` and no database access anywhere in the package.
+
+```
+app/core/report_export/
+  export_models.py    ReportExportData, ReportColumn, ReportRow, ReportSummary,
+                       ReportFilterDisplay, ReportType (closed list of report/statement names)
+  base_exporter.py     BaseExporter(ABC) — validate() → prepare() → export(), run() is the fixed pipeline
+  registry.py           ExporterRegistry — format string ("pdf"/"excel"/"csv") → Exporter class
+  export_service.py    ExportService — validates report + format, delegates to the registered Exporter
+  filenames.py          build_export_filename() — one shared naming convention for every download
+  exporters/
+    csv_exporter.py     stdlib csv — raw values only, no formatting
+    excel_exporter.py   openpyxl — native Decimal/date cells + number_format, never pre-rendered text
+    pdf_exporter.py     Jinja2 (templates/report.html + report.css) → WeasyPrint
+  templates/
+    report.html, report.css   the PDF's own print layout (independent of the browser's, §41.5)
+```
+
+`ReportExportData` is the one shape every exporter consumes — `title`, `subtitle`, `filters` (label/value pairs — doubles as a document's "party info" block for statements), `columns`, `rows`, `summary`, `generated_at`, `generated_by`, `tenant_name`, `footer`. A report module builds one of these from data it already fetched; the engine never queries anything itself.
+
+```mermaid
+flowchart LR
+    A[Report/Statement Router] --> B[Existing Report/Ledger Service]
+    B --> C["build_*_export_data() / Statement Builder"]
+    C --> D[ReportExportData]
+    D --> E[ExportService]
+    E --> F[ExporterRegistry]
+    F --> G{Format}
+    G -->|pdf| H[PDFExporter\nJinja2 → WeasyPrint]
+    G -->|excel| I[ExcelExporter\nopenpyxl]
+    G -->|csv| J[CSVExporter\nstdlib csv]
+    H --> K[HTTP Response\nContent-Disposition: attachment]
+    I --> K
+    J --> K
+```
+
+CSV is deliberately excluded for statements (a business document, not a data dump) — requesting it returns a clean `422 UNSUPPORTED_EXPORT_FORMAT` before any ledger data is even fetched.
+
+**Filenames** (`filenames.py`) follow one convention app-wide: `{Report_Or_Statement_Title}_{identifier}.{ext}`, where `identifier` is the entity's name for the 4 party-scoped documents (Customer/Supplier Ledger, Customer/Supplier Statement — the only 4 that set `ReportExportData.subtitle`) or today's date for the other 7 (aggregate) reports. Illegal filename characters are stripped; everything else is preserved verbatim. Examples: `Sales_Report_2026-07-30.pdf`, `Customer_Ledger_ABC_Sea_Food.xlsx`, `Supplier_Statement_ABC_Marine.pdf`.
+
+### 41.3 Statement Builder
+
+`app/modules/reports/statement_builder.py` — pure DTO-to-DTO transformation, **no database access, no new calculation**. Converts an already-fetched `CustomerLedgerResponse`/`SupplierLedgerResponse` (fetched via the *exact same*, unmodified `ReportsService.get_customer_ledger()`/`get_supplier_ledger()` the plain Ledger report itself uses) plus that party's own profile (`CompanyResponse.address_line1/2/city/state/pincode/country/phone/gstin`, or `SupplierResponse`'s single free-text `address`) into a `ReportExportData`. Both statement types funnel through one shared private helper so no logic is duplicated between the buy/sell sides. The only column difference from the plain Ledger report is dropping `transaction_type` — a business document doesn't print an internal enum value.
+
+### 41.4 Export Flow
+
+```
+GET /reports/export?report=<name>&format=<fmt>&<report's own filters>
+GET /reports/customer-statement?customer_id=<id>&format=<pdf|excel>
+GET /reports/supplier-statement?supplier_id=<id>&format=<pdf|excel>
+        │
+        ▼
+Router (reports:view only — no new permission for export/statements)
+        │
+        ▼
+Existing Report/Ledger Service — unchanged; walks every page of the
+filtered result set (an export/statement must contain every matching
+row, never just one page) via one shared pagination-walking primitive
+        │
+        ▼
+build_*_export_data()  /  Statement Builder  →  ReportExportData
+        │
+        ▼
+ExportService.export(data, report_type, format) → ExporterRegistry → Exporter
+        │
+        ▼
+HTTP Response — bytes + Content-Type + Content-Disposition: attachment; filename="..."
+```
+
+The BFF (`frontend/src/app/api/reports/{export,customer-statement,supplier-statement}/route.ts`) is a thin binary passthrough — it forwards the backend's bytes and headers unchanged, never parses them as JSON (unlike every other reports BFF route).
+
+### 41.5 Print Support
+
+Independent of PDF export: `frontend/styles/report-print.css` gives every page a clean **browser** printout (`Ctrl+P`), entirely via `@media print` — zero on-screen effect, zero business logic. Targets stable `data-slot` attributes (the same shadcn convention already used throughout `components/ui`) rather than one-off classes:
+
+| Hidden in print | Kept in print |
+|---|---|
+| `[data-slot="sidebar"]`, `[data-slot="app-header"]` | Title (`PageHeader`/`PageTitle`) |
+| `[data-slot="action-bar"]`, dropdown triggers/content (`ExportMenu`, Edit/Delete) | Summary (`SummaryGrid`/`MetricCard`) |
+| `[data-slot="report-filters"]` (Filter Bar) | Tables (`DataTable`'s own `<table>`) — incl. Customer/Supplier Ledger's own table, functionally a statement |
+| `[data-slot="data-table-pagination"]` | Footer content |
+| `[data-slot="tabs-list"]` (the switcher — the active tab's own content stays, since Radix only renders that one) | |
+
+`table { width/min-width }` is reset (overriding `DataTable`'s inline sizing) so a wide table never clips against the on-screen horizontal-scroll container; `thead { display: table-header-group }` repeats column headers on every printed page, the same technique the PDF template (§41.2) already uses. `@page { size: A4 }` by default; `ReportPageTemplate`'s `wide` prop (set on Trip/Boat Profitability and Fish Sales Analytics — the same 9+-column reports the PDF exporter's own `_LANDSCAPE_COLUMN_THRESHOLD` already switches to landscape) applies a `.report-print-landscape` class that assigns a `landscape`-sized `@page` to that printout, so the browser printout and the downloaded PDF agree on orientation.
+
+---
+
 ## Development Roadmap
 
 Durations assume **1 senior full-stack developer**, or 2 mid-level. Adjust proportionally.

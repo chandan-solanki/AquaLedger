@@ -72,6 +72,7 @@ export function DataTablePagination({
 
   return (
     <div
+      data-slot="data-table-pagination"
       className={cn(
         "flex flex-wrap items-center justify-between gap-4 px-1 py-1",
         className

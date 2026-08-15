@@ -15,5 +15,9 @@ interface ActionBarProps {
  * convention, use `PageActions` instead.
  */
 export function ActionBar({ children, className }: ActionBarProps) {
-  return <div className={cn("flex flex-wrap items-center gap-2", className)}>{children}</div>;
+  return (
+    <div data-slot="action-bar" className={cn("flex flex-wrap items-center gap-2", className)}>
+      {children}
+    </div>
+  );
 }

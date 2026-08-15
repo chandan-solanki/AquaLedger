@@ -11,10 +11,14 @@ interface ReportPageTemplateProps {
   title: string;
   description?: string;
   secondaryActions?: PageAction[];
+  /** The report's Export dropdown (`ExportMenu`), rendered left of the secondary actions - TASKS.md Sprint 11 Session 5 Phase B. */
+  exportMenu?: ReactNode;
   /** The report's Filter Bar (Date Range, Company/Supplier, ...), per `05_PAGE_CATALOG.md` §12. */
   filters?: ReactNode;
   /** The Summary KPI row — typically a `SummaryGrid` of `MetricCard`s. */
   summary?: ReactNode;
+  /** Reports with 9+ columns (Trip/Boat Profitability, Fish Sales Analytics) print in landscape - TASKS.md Sprint 11 Session 5 Phase D, matching the PDF exporter's own `_LANDSCAPE_COLUMN_THRESHOLD`. */
+  wide?: boolean;
   isLoading?: boolean;
   error?: { title: string; description?: string; onRetry?: () => void } | null;
   isEmpty?: boolean;
@@ -33,8 +37,10 @@ export function ReportPageTemplate({
   title,
   description,
   secondaryActions,
+  exportMenu,
   filters,
   summary,
+  wide = false,
   isLoading = false,
   error = null,
   isEmpty = false,
@@ -42,10 +48,19 @@ export function ReportPageTemplate({
   children,
 }: ReportPageTemplateProps) {
   return (
-    <PageContainer fullWidth>
-      <PageHeader title={title} description={description} actions={<PageActions secondary={secondaryActions} />} />
+    <PageContainer fullWidth className={wide ? "report-print-landscape" : undefined}>
+      <PageHeader
+        title={title}
+        description={description}
+        actions={
+          <>
+            {exportMenu}
+            <PageActions secondary={secondaryActions} />
+          </>
+        }
+      />
 
-      {filters}
+      {filters && <div data-slot="report-filters">{filters}</div>}
       {summary}
 
       {error ? (

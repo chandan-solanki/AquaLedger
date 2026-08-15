@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html class="{{ 'landscape' if is_landscape else 'portrait' }}">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+
+<div id="page-footer" class="page-footer-content">
+  {% if footer %}{{ footer }} &middot; {% endif %}Generated {{ generated_at }} by {{ generated_by }}
+</div>
+
+<header class="report-header">
+  <div class="brand">
+    <div class="logo-placeholder">{{ tenant_initials }}</div>
+    <div class="tenant-name">{{ tenant_name }}</div>
+  </div>
+  <div class="report-title-block">
+    <h1>{{ title }}</h1>
+    {% if subtitle %}<h2>{{ subtitle }}</h2>{% endif %}
+  </div>
+</header>
+
+{% if filters %}
+<section class="filters">
+  <h3>Filters</h3>
+  <ul>
+    {% for filter_item in filters %}
+    <li><span class="label">{{ filter_item.label }}:</span> <span class="value">{{ filter_item.value }}</span></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if summary %}
+<section class="summary">
+  <h3>Summary</h3>
+  <div class="summary-grid">
+    {% for summary_item in summary %}
+    <div class="summary-item">
+      <div class="summary-label">{{ summary_item.label }}</div>
+      <div class="summary-value">{{ summary_item.value }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<table class="data-table">
+  <thead>
+    <tr>
+      {% for column in columns %}
+      <th class="align-{{ column.alignment }}">{{ column.title }}</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      {% for column in columns %}
+      <td class="align-{{ column.alignment }}">{{ row[column.key] }}</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if not rows %}
+<p class="empty-state">No data for the selected filters.</p>
+{% endif %}
+
+</body>
+</html>

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Runs the backend (FastAPI/uvicorn, via uv) and frontend (Next.js) dev
-# servers together. Ctrl+C stops both.
+# servers together. Ctrl+C stops both.==-======
 
 set -euo pipefail
 

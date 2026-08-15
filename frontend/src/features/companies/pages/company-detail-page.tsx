@@ -10,6 +10,7 @@ import { DeleteConfirmationDialog } from "@/components/feedback/dialogs/delete-c
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { SectionHeader } from "@/components/layout/section-header";
+import { ExportMenu } from "@/components/reports";
 import { DetailPageTemplate } from "@/components/templates/detail-page-template";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/features/auth/hooks/use-permissions";
@@ -20,6 +21,7 @@ import {
 import { COMPANY_TYPE_LABELS } from "@/features/companies/constants/company-type";
 import { useCompany } from "@/features/companies/hooks/use-company";
 import { useDeleteCompany } from "@/features/companies/hooks/use-delete-company";
+import { triggerStatementDownload } from "@/features/reports/utils/trigger-report-download";
 import { normalizeApiError } from "@/utils/api-error";
 import { formatDateTime } from "@/utils/format-date";
 
@@ -72,6 +74,18 @@ export function CompanyDetailPage() {
         company && hasPermission("company:delete")
           ? [{ label: "Delete", icon: Trash2, onClick: () => setIsDeleteDialogOpen(true) }]
           : undefined
+      }
+      exportMenu={
+        company && hasPermission("reports:view") ? (
+          <ExportMenu
+            label="Download Statement"
+            formats={["excel", "pdf"]}
+            onExport={(format) => {
+              if (format === "csv") return;
+              triggerStatementDownload("customer", format, { customer_id: company.id });
+            }}
+          />
+        ) : undefined
       }
       isLoading={companyQuery.isLoading}
       error={

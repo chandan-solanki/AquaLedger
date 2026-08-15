@@ -1,0 +1,101 @@
+/**
+ * Browser print support (TASKS.md Sprint 11 Session 5 Phase D). Loaded
+ * globally (see src/app/layout.tsx) but every rule lives inside
+ * `@media print`, so it has zero on-screen effect. Hides app chrome that
+ * makes no sense on a printed page - Navigation/Sidebar, Buttons,
+ * Dropdowns, Filters, Search bars, Pagination, Tabs - while keeping
+ * Title, Summary, Tables, Statements and the Footer, matching the same
+ * PDF-export sensibility the report_export engine's own report.css
+ * already applies to the downloaded PDF (thead repeats per page, tables
+ * never clip, wide reports go landscape).
+ *
+ * Every selector below targets a stable `data-slot` attribute (the same
+ * shadcn convention already used throughout components/ui) rather than
+ * a Tailwind utility class, so this file keeps working even if a
+ * component's own styling classes change.
+ */
+
+@media print {
+  /* Navigation / Sidebar */
+  [data-slot="sidebar"],
+  [data-slot="sidebar-gap"],
+  [data-slot="sidebar-rail"],
+  [data-slot="app-header"] {
+    display: none !important;
+  }
+
+  /* Buttons / Dropdowns (Edit/Delete, ExportMenu and every other
+   * page-header action) */
+  [data-slot="action-bar"],
+  [data-slot="dropdown-menu-trigger"],
+  [data-slot="dropdown-menu-content"] {
+    display: none !important;
+  }
+
+  /* Filters / Search bars - the report's own Filter Bar slot */
+  [data-slot="report-filters"] {
+    display: none !important;
+  }
+
+  /* Pagination */
+  [data-slot="data-table-pagination"] {
+    display: none !important;
+  }
+
+  /* Tabs - hides the tab switcher itself; the active tab's own content
+   * (already the only one Radix renders) stays and prints normally. */
+  [data-slot="tabs-list"] {
+    display: none !important;
+  }
+
+  /* Avoid clipped tables - DataTable's own scroll container clips/
+   * scrolls overflow for on-screen horizontal scrolling; there is no
+   * viewport to scroll within on a printed page, so let the table lay
+   * out at its natural width instead. `!important` here intentionally
+   * overrides DataTable's inline `style={{ minWidth: ... }}` - an
+   * `!important` author-stylesheet rule wins over a plain (non-
+   * important) inline style regardless of specificity. */
+  .overflow-auto,
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
+  table {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* Repeat table headers on every printed page - the same
+   * `table-header-group` technique the PDF exporter's own report.css
+   * uses, and avoid splitting a single row across a page break. */
+  thead {
+    display: table-header-group;
+  }
+  tr {
+    break-inside: avoid;
+  }
+
+  /* A4, portrait by default. */
+  @page {
+    size: A4 portrait;
+    margin: 1.5cm;
+  }
+
+  /* Wide reports (Trip/Boat Profitability, Fish Sales Analytics - 9+
+   * columns) switch to landscape automatically - `ReportPageTemplate`'s
+   * own `wide` prop applies this class, matching the PDF exporter's own
+   * `_LANDSCAPE_COLUMN_THRESHOLD` exactly, so the browser printout and
+   * the downloaded PDF agree on which reports need the wider page. */
+  .report-print-landscape {
+    page: landscape;
+  }
+  @page landscape {
+    size: A4 landscape;
+    margin: 1.5cm;
+  }
+
+  /* Kept, deliberately untouched: Title (PageHeader/PageTitle), Summary
+   * (SummaryGrid/MetricCard), Tables (DataTable's own <table>),
+   * Statements (Customer/Supplier Ledger's own table - the same
+   * DataTable), and the Footer (any page-level footer content). None of
+   * these are targeted for hiding above. */
+}

@@ -14,6 +14,8 @@ export interface ExportMenuProps {
   disabled?: boolean;
   label?: string;
   className?: string;
+  /** Restricts which menu items render — defaults to all three. Statements (TASKS.md Sprint 11 Session 5 Phase C) pass `["excel", "pdf"]` since CSV is not a supported statement format. */
+  formats?: ExportFormat[];
 }
 
 const EXPORT_OPTIONS: { format: ExportFormat; label: string; icon: LucideIcon }[] = [
@@ -23,7 +25,17 @@ const EXPORT_OPTIONS: { format: ExportFormat; label: string; icon: LucideIcon }[
 ];
 
 /** The Export trigger for a Report/List page toolbar — UI only, per this session's scope; no CSV/Excel/PDF generation happens here. */
-export function ExportMenu({ onExport, disabled, label = "Export", className }: ExportMenuProps) {
+export function ExportMenu({
+  onExport,
+  disabled,
+  label = "Export",
+  className,
+  formats,
+}: ExportMenuProps) {
+  const options = formats
+    ? EXPORT_OPTIONS.filter((option) => formats.includes(option.format))
+    : EXPORT_OPTIONS;
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -33,7 +45,7 @@ export function ExportMenu({ onExport, disabled, label = "Export", className }: 
         </ToolbarButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        {EXPORT_OPTIONS.map(({ format: exportFormat, label: optionLabel, icon: Icon }) => (
+        {options.map(({ format: exportFormat, label: optionLabel, icon: Icon }) => (
           <DropdownMenuItem key={exportFormat} onClick={() => onExport(exportFormat)}>
             <Icon />
             {optionLabel}

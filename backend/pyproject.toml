@@ -8,6 +8,8 @@ dependencies = [
     "argon2-cffi>=25.1.0",
     "asyncpg>=0.31.0",
     "fastapi>=0.139.2",
+    "jinja2>=3.1.6",
+    "openpyxl>=3.1.5",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
     "pyjwt>=2.13.0",
@@ -16,6 +18,7 @@ dependencies = [
     "structlog>=26.1.0",
     "uuid6>=2025.0.1",
     "uvicorn[standard]>=0.51.0",
+    "weasyprint>=69.0",
 ]
 
 [dependency-groups]
@@ -25,6 +28,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.15.22",
+    "types-openpyxl>=3.1.5.20260724",
 ]
 
 [tool.pytest.ini_options]
@@ -72,4 +76,11 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = "alembic.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# WeasyPrint ships no py.typed marker and no stub package exists on PyPI
+# (unlike openpyxl, covered by types-openpyxl above) - every call into it
+# is necessarily Any.
+module = "weasyprint.*"
 ignore_missing_imports = true

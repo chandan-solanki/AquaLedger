@@ -309,15 +309,9 @@ class DashboardService:
         aggregate query (DashboardRepository); the outstanding summary
         reuses figures the caller already computed earlier in
         get_dashboard rather than re-querying them."""
-        top_customer_rows = await self._repo.get_top_customers(
-            tenant_id, limit=TOP_CUSTOMERS_LIMIT
-        )
-        top_supplier_rows = await self._repo.get_top_suppliers(
-            tenant_id, limit=TOP_SUPPLIERS_LIMIT
-        )
-        top_fish_rows = await self._repo.get_top_fish_widget(
-            tenant_id, limit=TOP_FISH_WIDGET_LIMIT
-        )
+        top_customer_rows = await self._repo.get_top_customers(tenant_id, limit=TOP_CUSTOMERS_LIMIT)
+        top_supplier_rows = await self._repo.get_top_suppliers(tenant_id, limit=TOP_SUPPLIERS_LIMIT)
+        top_fish_rows = await self._repo.get_top_fish_widget(tenant_id, limit=TOP_FISH_WIDGET_LIMIT)
 
         top_customers = [
             TopCustomerItem(

@@ -12,7 +12,9 @@ import { ErrorState } from "@/components/feedback/error-state";
 import { SectionHeader } from "@/components/layout/section-header";
 import { DetailPageTemplate } from "@/components/templates/detail-page-template";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePermissions } from "@/features/auth/hooks/use-permissions";
+import { FishSalesAnalyticsTab } from "@/features/fish/components/fish-sales-analytics-tab";
 import { FISH_STATUS_BADGE_VARIANT, FISH_STATUS_LABELS, toFishStatus } from "@/features/fish/constants/fish-status";
 import { useDeleteFish } from "@/features/fish/hooks/use-delete-fish";
 import { useFish } from "@/features/fish/hooks/use-fish";
@@ -84,51 +86,71 @@ export function FishDetailPage() {
       }
     >
       {fish && (
-        <div className="space-y-6">
-          <SectionHeader title="Fish Information" />
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <InfoCard title="Details">
-              <DescriptionList
-                items={[
-                  { term: "Fish Name", details: fish.name },
-                  { term: "Fish Code", details: fish.code },
-                  { term: "Local Name", details: fish.localName ?? "—" },
-                  { term: "Scientific Name", details: fish.scientificName ?? "—" },
-                  { term: "Category", details: fish.category ?? "—" },
-                  { term: "Unit", details: FISH_UNIT_LABELS[fish.unit] },
-                  { term: "Status", details: status ? FISH_STATUS_LABELS[status] : "—" },
-                  { term: "Created At", details: formatDateTime(fish.createdAt) },
-                  { term: "Updated At", details: formatDateTime(fish.updatedAt) },
-                ]}
-              />
-            </InfoCard>
-
-            <InfoCard title="Pricing & Tax">
-              <DescriptionList
-                items={[
-                  { term: "HSN Code", details: fish.hsnCode ?? "—" },
-                  {
-                    term: "Default Purchase Rate",
-                    details: fish.defaultPurchaseRate ? formatRate(fish.defaultPurchaseRate) : "—",
-                  },
-                  {
-                    term: "Default Sale Rate",
-                    details: fish.defaultSaleRate ? formatRate(fish.defaultSaleRate) : "—",
-                  },
-                ]}
-              />
-            </InfoCard>
-          </div>
-
-          <InfoCard title="Description">
-            {fish.description ? (
-              <p className="text-sm whitespace-pre-wrap">{fish.description}</p>
-            ) : (
-              <EmptyState title="No description added" description="A description for this fish will appear here." />
+        <Tabs defaultValue="overview">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            {hasPermission("reports:view") && (
+              <TabsTrigger value="sales-analytics">Sales Analytics</TabsTrigger>
             )}
-          </InfoCard>
-        </div>
+          </TabsList>
+
+          <TabsContent value="overview">
+            <div className="space-y-6">
+              <SectionHeader title="Fish Information" />
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <InfoCard title="Details">
+                  <DescriptionList
+                    items={[
+                      { term: "Fish Name", details: fish.name },
+                      { term: "Fish Code", details: fish.code },
+                      { term: "Local Name", details: fish.localName ?? "—" },
+                      { term: "Scientific Name", details: fish.scientificName ?? "—" },
+                      { term: "Category", details: fish.category ?? "—" },
+                      { term: "Unit", details: FISH_UNIT_LABELS[fish.unit] },
+                      { term: "Status", details: status ? FISH_STATUS_LABELS[status] : "—" },
+                      { term: "Created At", details: formatDateTime(fish.createdAt) },
+                      { term: "Updated At", details: formatDateTime(fish.updatedAt) },
+                    ]}
+                  />
+                </InfoCard>
+
+                <InfoCard title="Pricing & Tax">
+                  <DescriptionList
+                    items={[
+                      { term: "HSN Code", details: fish.hsnCode ?? "—" },
+                      {
+                        term: "Default Purchase Rate",
+                        details: fish.defaultPurchaseRate ? formatRate(fish.defaultPurchaseRate) : "—",
+                      },
+                      {
+                        term: "Default Sale Rate",
+                        details: fish.defaultSaleRate ? formatRate(fish.defaultSaleRate) : "—",
+                      },
+                    ]}
+                  />
+                </InfoCard>
+              </div>
+
+              <InfoCard title="Description">
+                {fish.description ? (
+                  <p className="text-sm whitespace-pre-wrap">{fish.description}</p>
+                ) : (
+                  <EmptyState
+                    title="No description added"
+                    description="A description for this fish will appear here."
+                  />
+                )}
+              </InfoCard>
+            </div>
+          </TabsContent>
+
+          {hasPermission("reports:view") && (
+            <TabsContent value="sales-analytics">
+              <FishSalesAnalyticsTab fishId={fish.id} />
+            </TabsContent>
+          )}
+        </Tabs>
       )}
 
       {fish && (
