@@ -15,7 +15,9 @@ class PurchaseBillItemResponse(BaseModel):
     only)"), paired with the Session 3 request schemas below.
     discount_amount/taxable_amount/tax_amount/line_total are computed
     server-side by app.modules.purchase.domain.totals and recalculated on
-    every item mutation (Session 4) - never client-supplied."""
+    every item mutation (Session 4) - never client-supplied.
+    purchase_order_item_id (Sprint 12 Session 12) is only ever non-null
+    when the parent purchase bill is itself linked to a purchase order."""
 
     model_config = ConfigDict(
         from_attributes=True,
@@ -24,6 +26,7 @@ class PurchaseBillItemResponse(BaseModel):
                 "id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c06",
                 "tenant_id": "019f7af3-83ae-783a-b139-40a239786b2f",
                 "purchase_bill_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c05",
+                "purchase_order_item_id": None,
                 "line_number": 1,
                 "description": "Pomfret - Grade A",
                 "quantity": "50.000",
@@ -44,6 +47,7 @@ class PurchaseBillItemResponse(BaseModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     purchase_bill_id: uuid.UUID
+    purchase_order_item_id: uuid.UUID | None
     line_number: int
     description: str | None
     quantity: Decimal
@@ -92,6 +96,14 @@ class PurchaseBillItemCreateRequest(BaseModel):
         default=Decimal("0"), ge=0, le=100, max_digits=5, decimal_places=2
     )
     tax_rate: Decimal = Field(default=Decimal("0"), ge=0, le=100, max_digits=5, decimal_places=2)
+    purchase_order_item_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Bills this line against a specific purchase order item's remaining "
+            "quantity - only valid when the parent purchase bill itself has "
+            "purchase_order_id set, and must belong to that same purchase order."
+        ),
+    )
 
 
 class PurchaseBillItemUpdateRequest(BaseModel):
@@ -118,6 +130,10 @@ class PurchaseBillItemUpdateRequest(BaseModel):
         default=None, ge=0, le=100, max_digits=5, decimal_places=2
     )
     tax_rate: Decimal | None = Field(default=None, ge=0, le=100, max_digits=5, decimal_places=2)
+    purchase_order_item_id: uuid.UUID | None = Field(
+        default=None,
+        description="Re-link (or unlink, if set to null) this item's purchase order item.",
+    )
 
 
 class PurchaseBillItemListParams(BaseModel):
@@ -154,7 +170,10 @@ class PurchaseBillResponse(BaseModel):
     discount_amount/taxable_amount/tax_amount/total_amount/balance_amount
     are computed server-side by app.modules.purchase.domain.totals and
     recalculated on every item mutation (Session 4); paid_amount stays 0
-    until the Session 5 supplier-payment workflow."""
+    until the Session 5 supplier-payment workflow. purchase_order_id
+    (Sprint 12 Session 12) is set once, at creation, from
+    PurchaseBillCreateRequest, and is never changed afterward -
+    PurchaseBillUpdateRequest has no field for it."""
 
     model_config = ConfigDict(
         from_attributes=True,
@@ -163,6 +182,7 @@ class PurchaseBillResponse(BaseModel):
                 "id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c05",
                 "tenant_id": "019f7af3-83ae-783a-b139-40a239786b2f",
                 "supplier_id": "019f83c8-6489-7bcf-beba-c241b7abbb03",
+                "purchase_order_id": None,
                 "bill_number": None,
                 "bill_date": "2026-07-23",
                 "due_date": "2026-08-22",
@@ -188,6 +208,7 @@ class PurchaseBillResponse(BaseModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     supplier_id: uuid.UUID
+    purchase_order_id: uuid.UUID | None
     bill_number: str | None
     bill_date: date
     due_date: date | None
@@ -220,7 +241,10 @@ class PurchaseBillCreateRequest(BaseModel):
     posting workflow assigns them. Unlike InvoiceCreateRequest,
     `transport_charge`/`other_charge` are NOT client-settable in this
     session either (TASKS.md Sprint 11 Session 2 lists them under "Server
-    owns")."""
+    owns"). purchase_order_id (Sprint 12 Session 12) is optional and,
+    unlike every other field here, set-once: there is no equivalent field
+    on PurchaseBillUpdateRequest, so once a bill is created it can never be
+    re-linked to a different purchase order (or unlinked) afterward."""
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -235,6 +259,13 @@ class PurchaseBillCreateRequest(BaseModel):
 
     supplier_id: uuid.UUID = Field(
         description="Billing supplier - must exist for this tenant and be active."
+    )
+    purchase_order_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Optional originating purchase order - must belong to the same "
+            "supplier, must be CONFIRMED or FULFILLED (not draft or cancelled)."
+        ),
     )
     bill_date: date
     due_date: date | None = None

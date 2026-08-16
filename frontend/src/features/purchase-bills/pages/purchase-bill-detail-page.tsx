@@ -1,6 +1,7 @@
 "use client";
 
 import { FileText, Pencil, Send } from "lucide-react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
@@ -10,9 +11,11 @@ import { ConfirmationDialog } from "@/components/feedback/dialogs/confirmation-d
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { ContentSection } from "@/components/layout/content-section";
+import { ExportMenu } from "@/components/reports";
 import { DetailPageTemplate } from "@/components/templates/detail-page-template";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/features/auth/hooks/use-permissions";
+import { usePurchaseOrder } from "@/features/purchase-orders";
 import { PurchaseBillItemTable } from "@/features/purchase-bills/components/purchase-bill-item-table";
 import {
   PURCHASE_BILL_STATUS_BADGE_VARIANT,
@@ -21,6 +24,7 @@ import {
 import { usePostPurchaseBill } from "@/features/purchase-bills/hooks/use-post-purchase-bill";
 import { usePurchaseBill } from "@/features/purchase-bills/hooks/use-purchase-bill";
 import { useSupplierOptions } from "@/features/purchase-bills/hooks/use-supplier-options";
+import { triggerPurchaseBillDocumentDownload } from "@/features/purchase-bills/utils/trigger-purchase-bill-document-download";
 import { normalizeApiError } from "@/utils/api-error";
 import { formatCurrency } from "@/utils/format-currency";
 import { formatDate, formatDateTime } from "@/utils/format-date";
@@ -65,6 +69,7 @@ export function PurchaseBillDetailPage() {
   const purchaseBillQuery = usePurchaseBill(purchaseBillId);
   const supplierOptions = useSupplierOptions();
   const postPurchaseBill = usePostPurchaseBill();
+  const linkedPurchaseOrderQuery = usePurchaseOrder(purchaseBillQuery.data?.purchaseOrderId ?? undefined);
 
   if (!hasPermission("purchase:view")) {
     return (
@@ -102,6 +107,22 @@ export function PurchaseBillDetailPage() {
           ? [{ label: "Edit", icon: Pencil, href: `/purchase-bills/${bill.id}/edit` }]
           : undefined
       }
+      exportMenu={
+        // Only a posted bill (or beyond) has a bill_number to print - a
+        // draft has nothing to download yet (backend: 422
+        // PURCHASE_BILL_DOCUMENT_NOT_AVAILABLE), so the button mirrors
+        // that same backend-enforced rule the way Edit mirrors DRAFT-only.
+        bill && !isDraft && hasPermission("purchase:view") ? (
+          <ExportMenu
+            label="Download Purchase Bill"
+            formats={["pdf"]}
+            onExport={(format) => {
+              if (format !== "pdf") return;
+              triggerPurchaseBillDocumentDownload(bill.id);
+            }}
+          />
+        ) : undefined
+      }
       isLoading={purchaseBillQuery.isLoading}
       error={
         apiError
@@ -121,6 +142,20 @@ export function PurchaseBillDetailPage() {
                 <DescriptionList
                   items={[
                     { term: "Supplier", details: supplierName ?? "—" },
+                    {
+                      term: "Purchase Order",
+                      details: bill.purchaseOrderId ? (
+                        hasPermission("purchase_order:view") ? (
+                          <Link href={`/purchase-orders/${bill.purchaseOrderId}`} className="hover:underline">
+                            {linkedPurchaseOrderQuery.data?.poNumber ?? "View purchase order"}
+                          </Link>
+                        ) : (
+                          (linkedPurchaseOrderQuery.data?.poNumber ?? "Linked purchase order")
+                        )
+                      ) : (
+                        "—"
+                      ),
+                    },
                     { term: "Bill Number", details: bill.billNumber ?? "Not yet posted" },
                     { term: "Status", details: PURCHASE_BILL_STATUS_LABELS[bill.status] },
                     { term: "Bill Date", details: formatDate(bill.billDate) },
@@ -158,7 +193,11 @@ export function PurchaseBillDetailPage() {
             )}
           </InfoCard>
 
-          <PurchaseBillItemTable purchaseBillId={bill.id} purchaseBillStatus={bill.status} />
+          <PurchaseBillItemTable
+            purchaseBillId={bill.id}
+            purchaseBillStatus={bill.status}
+            purchaseOrderId={bill.purchaseOrderId}
+          />
 
           <ConfirmationDialog
             open={isPostDialogOpen}

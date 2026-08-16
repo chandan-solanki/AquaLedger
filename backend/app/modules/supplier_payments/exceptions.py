@@ -102,6 +102,16 @@ class SupplierPaymentTotalsInvalidError(BusinessRuleError):
     code = "SUPPLIER_PAYMENT_TOTALS_INVALID"
 
 
+class SupplierPaymentDocumentNotAvailableError(BusinessRuleError):
+    """Raised when GET /supplier-payments/{id}/document (Sprint 12 Session
+    4) is requested for a supplier payment with no payment_number yet - a
+    formal receipt can't carry a number that doesn't exist (numbers are
+    assigned only at posting, never at draft creation), so a still-DRAFT
+    payment has nothing to print. Mirrors PaymentDocumentNotAvailableError."""
+
+    code = "SUPPLIER_PAYMENT_DOCUMENT_NOT_AVAILABLE"
+
+
 class SupplierPaymentNumberConflictError(ConflictError):
     """Defensive backstop for the `ix_supplier_payments_tenant_payment_number`
     unique index firing on commit - should be unreachable given

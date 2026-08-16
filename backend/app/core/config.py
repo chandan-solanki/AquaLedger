@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     account_lockout_threshold: int = 5
     account_lockout_minutes: int = 15
 
+    # Document Engine - local filesystem storage root for generated business
+    # documents. Configurable so deployments can point it at a mounted
+    # volume; never hard-coded (app.core.document_engine.storage).
+    document_storage_root: str = "storage/documents"
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

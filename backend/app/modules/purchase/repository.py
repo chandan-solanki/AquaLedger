@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.purchase.constants import PurchaseStatus
 from app.modules.purchase.models import PurchaseBill, PurchaseBillItem, PurchaseSequence
+from app.modules.purchase_orders.domain.billing import ItemBillingInfo
 
 _SORT_COLUMNS: dict[str, Any] = {
     "bill_date": PurchaseBill.bill_date,
@@ -288,3 +289,91 @@ class PurchaseRepository:
             )
         )
         return result.scalar_one()
+
+    async def list_by_purchase_order(
+        self, purchase_order_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> list[PurchaseBill]:
+        """Every non-deleted purchase bill linked to one purchase order, most
+        recent bill_date first - backs GET /purchase-orders/{id}/purchase-bills
+        (Sprint 12 Session 13). No pagination: a purchase order's bill count
+        is small and bounded, the same posture search_items takes for a
+        bill's own line items."""
+        result = await self._session.execute(
+            select(PurchaseBill)
+            .where(
+                PurchaseBill.purchase_order_id == purchase_order_id,
+                PurchaseBill.tenant_id == tenant_id,
+                PurchaseBill.deleted_at.is_(None),
+            )
+            .order_by(PurchaseBill.bill_date.desc(), PurchaseBill.id.desc())
+        )
+        return list(result.scalars().all())
+
+    async def sum_billed_quantity_for_po_item(
+        self,
+        purchase_order_item_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        *,
+        exclude_item_id: uuid.UUID | None = None,
+    ) -> Decimal:
+        """Total quantity already billed against one purchase order item,
+        across every valid (non-deleted, non-cancelled-bill) PurchaseBillItem
+        that references it (Sprint 12 Session 12) - the single-item form
+        used by PurchaseService's over-billing check in add_item/
+        update_item. `exclude_item_id` lets update_item exclude the item's
+        own prior contribution before comparing against its proposed new
+        quantity. Deliberately includes DRAFT bills' items, not just POSTED
+        ones - see PurchaseService._validate_po_item_link's own docstring
+        for why (immediate, at-entry-time over-billing feedback rather
+        than a race that only surfaces at posting time)."""
+        conditions = [
+            PurchaseBillItem.purchase_order_item_id == purchase_order_item_id,
+            PurchaseBillItem.tenant_id == tenant_id,
+            PurchaseBill.deleted_at.is_(None),
+            PurchaseBill.status != PurchaseStatus.CANCELLED,
+        ]
+        if exclude_item_id is not None:
+            conditions.append(PurchaseBillItem.id != exclude_item_id)
+        result = await self._session.execute(
+            select(func.coalesce(func.sum(PurchaseBillItem.quantity), 0))
+            .select_from(PurchaseBillItem)
+            .join(PurchaseBill, PurchaseBill.id == PurchaseBillItem.purchase_bill_id)
+            .where(*conditions)
+        )
+        return result.scalar_one()
+
+    async def sum_billed_by_po_items(
+        self, purchase_order_item_ids: list[uuid.UUID], tenant_id: uuid.UUID
+    ) -> dict[uuid.UUID, ItemBillingInfo]:
+        """Batched form of the same aggregation - one query for an entire
+        purchase order's items regardless of how many there are (no N+1),
+        `GROUP BY purchase_order_item_id`. Used to compose the
+        GET /purchase-orders/{id} and .../items billing summaries in
+        app.modules.purchase_orders.router. Items with nothing billed at
+        all are simply absent from the returned dict."""
+        if not purchase_order_item_ids:
+            return {}
+        rows = (
+            await self._session.execute(
+                select(
+                    PurchaseBillItem.purchase_order_item_id,
+                    func.coalesce(func.sum(PurchaseBillItem.quantity), 0),
+                    func.coalesce(func.sum(PurchaseBillItem.line_total), 0),
+                )
+                .select_from(PurchaseBillItem)
+                .join(PurchaseBill, PurchaseBill.id == PurchaseBillItem.purchase_bill_id)
+                .where(
+                    PurchaseBillItem.purchase_order_item_id.in_(purchase_order_item_ids),
+                    PurchaseBillItem.tenant_id == tenant_id,
+                    PurchaseBill.deleted_at.is_(None),
+                    PurchaseBill.status != PurchaseStatus.CANCELLED,
+                )
+                .group_by(PurchaseBillItem.purchase_order_item_id)
+            )
+        ).all()
+        return {
+            po_item_id: ItemBillingInfo(
+                billed_quantity=billed_quantity, billed_amount=billed_amount
+            )
+            for po_item_id, billed_quantity, billed_amount in rows
+        }

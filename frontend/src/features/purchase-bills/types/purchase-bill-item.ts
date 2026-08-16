@@ -7,11 +7,16 @@
  * `InvoiceItem`, there is no `fish_id`/`trip_catch_id` - a purchase line has
  * no link to a sold-fish master or a trip catch (app/modules/purchase/
  * schemas.py's `PurchaseBillItemCreateRequest` docstring).
+ *
+ * `purchase_order_item_id` (Sprint 12 Session 12) is only ever non-null
+ * when the parent purchase bill is itself linked to a purchase order
+ * (`purchase_bill.purchase_order_id`).
  */
 export interface BackendPurchaseBillItem {
   id: string;
   tenant_id: string;
   purchase_bill_id: string;
+  purchase_order_item_id: string | null;
   line_number: number;
   description: string | null;
   quantity: string;
@@ -32,6 +37,7 @@ export interface PurchaseBillItem {
   id: string;
   tenantId: string;
   purchaseBillId: string;
+  purchaseOrderItemId: string | null;
   lineNumber: number;
   description: string | null;
   quantity: string;
@@ -52,6 +58,7 @@ export function mapBackendPurchaseBillItem(item: BackendPurchaseBillItem): Purch
     id: item.id,
     tenantId: item.tenant_id,
     purchaseBillId: item.purchase_bill_id,
+    purchaseOrderItemId: item.purchase_order_item_id,
     lineNumber: item.line_number,
     description: item.description,
     quantity: item.quantity,
@@ -77,6 +84,13 @@ export function mapBackendPurchaseBillItem(item: BackendPurchaseBillItem): Purch
  * `trip_catch_id` - a purchase line has no link to a sold-fish master or a
  * trip catch. Financial fields (discount_amount/taxable_amount/tax_amount/
  * line_total) are never accepted - the server always owns them.
+ *
+ * `purchase_order_item_id` (Sprint 12 Session 12) is optional - only valid
+ * when the parent bill itself has `purchase_order_id` set, and must
+ * belong to that same purchase order (422 otherwise). The backend enforces
+ * that this item's quantity, added to every other bill item already
+ * billed against the same purchase order item, never exceeds that item's
+ * own ordered quantity (`PURCHASE_BILL_OVER_BILLING`).
  */
 export interface PurchaseBillItemCreateRequest {
   description: string;
@@ -85,6 +99,7 @@ export interface PurchaseBillItemCreateRequest {
   rate: string;
   discount_percent?: string;
   tax_rate?: string;
+  purchase_order_item_id?: string;
 }
 
 /**

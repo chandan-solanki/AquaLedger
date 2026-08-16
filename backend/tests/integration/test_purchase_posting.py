@@ -23,6 +23,7 @@ from app.modules.purchase.schemas import (
     PurchaseBillUpdateRequest,
 )
 from app.modules.purchase.service import PurchaseService
+from app.modules.purchase_orders.service import PurchaseOrderService
 from app.modules.suppliers.models import Supplier
 
 _BILL_DATE = date(2026, 7, 22)
@@ -30,7 +31,7 @@ _BILL_DATE = date(2026, 7, 22)
 
 @pytest.fixture
 def service(db_session: AsyncSession) -> PurchaseService:
-    return PurchaseService(db_session)
+    return PurchaseService(db_session, purchase_order_service=PurchaseOrderService(db_session))
 
 
 @pytest.fixture

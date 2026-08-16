@@ -11,6 +11,7 @@ import { DeleteConfirmationDialog } from "@/components/feedback/dialogs/delete-c
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { ContentSection } from "@/components/layout/content-section";
+import { ExportMenu } from "@/components/reports";
 import { DetailPageTemplate } from "@/components/templates/detail-page-template";
 import { Badge } from "@/components/ui/badge";
 import type { PageAction } from "@/components/layout/page-actions";
@@ -25,6 +26,7 @@ import { useDeleteSupplierPayment } from "@/features/supplier-payments/hooks/use
 import { usePostSupplierPayment } from "@/features/supplier-payments/hooks/use-post-supplier-payment";
 import { useSupplierOptions } from "@/features/supplier-payments/hooks/use-supplier-options";
 import { useSupplierPayment } from "@/features/supplier-payments/hooks/use-supplier-payment";
+import { triggerSupplierPaymentDocumentDownload } from "@/features/supplier-payments/utils/trigger-supplier-payment-document-download";
 import { normalizeApiError } from "@/utils/api-error";
 import { formatCurrency } from "@/utils/format-currency";
 import { formatDate, formatDateTime } from "@/utils/format-date";
@@ -112,6 +114,23 @@ export function SupplierPaymentDetailPage() {
           : undefined
       }
       secondaryActions={secondaryActions.length > 0 ? secondaryActions : undefined}
+      exportMenu={
+        // Only a posted payment has a payment_number to print - a draft
+        // has nothing to download yet (backend: 422
+        // SUPPLIER_PAYMENT_DOCUMENT_NOT_AVAILABLE), so the button mirrors
+        // that same backend-enforced rule the way Edit/Delete mirror
+        // DRAFT-only.
+        payment && !isDraft && hasPermission("supplier_payment:view") ? (
+          <ExportMenu
+            label="Download Receipt"
+            formats={["pdf"]}
+            onExport={(format) => {
+              if (format !== "pdf") return;
+              triggerSupplierPaymentDocumentDownload(payment.id);
+            }}
+          />
+        ) : undefined
+      }
       isLoading={supplierPaymentQuery.isLoading}
       error={
         apiError

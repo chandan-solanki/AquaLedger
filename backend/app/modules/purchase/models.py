@@ -49,6 +49,13 @@ class PurchaseBill(TimestampMixin, Base):
     supplier_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=False
     )
+    # Sprint 12 Session 12: optional origin purchase order - nullable so
+    # every existing/standalone purchase bill is unaffected. Set only at
+    # creation (PurchaseBillCreateRequest), never changed afterward -
+    # PurchaseBillUpdateRequest deliberately has no field for it.
+    purchase_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("purchase_orders.id")
+    )
 
     bill_number: Mapped[str | None] = mapped_column(String(50))
     bill_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
@@ -135,6 +142,12 @@ class PurchaseBill(TimestampMixin, Base):
             unique=True,
             postgresql_where=deleted_at.is_(None) & bill_number.isnot(None),
         ),
+        Index(
+            "ix_purchase_bills_tenant_purchase_order",
+            "tenant_id",
+            "purchase_order_id",
+            postgresql_where=deleted_at.is_(None),
+        ),
     )
 
 
@@ -162,6 +175,16 @@ class PurchaseBillItem(TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("purchase_bills.id"), nullable=False
     )
     line_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Sprint 12 Session 12: optional link to the specific purchase order
+    # item this line bills against - only meaningful when the parent
+    # PurchaseBill itself has purchase_order_id set (enforced in
+    # PurchaseService, not at the DB level). Never cascade-deleted: a
+    # PurchaseOrderItem can only be hard-deleted while its own order is
+    # DRAFT, a state no bill is ever allowed to link against, so this FK
+    # is never at risk of dangling in practice.
+    purchase_order_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("purchase_order_items.id")
+    )
 
     description: Mapped[str | None] = mapped_column(Text)
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
@@ -186,6 +209,7 @@ class PurchaseBillItem(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_purchase_bill_items_tenant", "tenant_id"),
         Index("ix_purchase_bill_items_tenant_bill", "tenant_id", "purchase_bill_id"),
+        Index("ix_purchase_bill_items_purchase_order_item", "purchase_order_item_id"),
     )
 
 

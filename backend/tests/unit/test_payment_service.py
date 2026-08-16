@@ -282,17 +282,20 @@ class _InvoiceStub:
 
 
 class _FakeInvoiceService:
-    """Stands in for InvoiceService.get - the only entry point
+    """Stands in for InvoiceService.get_for_update - the only entry point
     _ensure_invoice_allocatable calls on it (ARCHITECTURE.md §2 -
     cross-module access goes through the other module's service, never its
-    repository)."""
+    repository). Sprint 13 Session 2's concurrency fix switched
+    _ensure_invoice_allocatable from the unlocked get() to the row-locking
+    get_for_update() - this fake only needs to expose whichever one is
+    actually called, not both."""
 
     def __init__(self, *, invoice: _InvoiceStub | None = None, raises: bool = False) -> None:
         self.invoice = invoice
         self.raises = raises
         self.get_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
 
-    async def get(self, invoice_id: uuid.UUID, *, tenant_id: uuid.UUID) -> _InvoiceStub:
+    async def get_for_update(self, invoice_id: uuid.UUID, *, tenant_id: uuid.UUID) -> _InvoiceStub:
         self.get_calls.append((invoice_id, tenant_id))
         if self.raises:
             raise InvoiceNotFoundError("Invoice not found")

@@ -13,6 +13,7 @@ from app.modules.suppliers.constants import SupplierStatus
 
 if TYPE_CHECKING:
     from app.modules.purchase.models import PurchaseBill
+    from app.modules.purchase_orders.models import PurchaseOrder
     from app.modules.supplier_payments.models import SupplierPayment
 
 
@@ -68,6 +69,7 @@ class Supplier(TimestampMixin, Base):
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
 
     purchase_bills: Mapped[list["PurchaseBill"]] = relationship(back_populates="supplier")
+    purchase_orders: Mapped[list["PurchaseOrder"]] = relationship(back_populates="supplier")
     supplier_payments: Mapped[list["SupplierPayment"]] = relationship(back_populates="supplier")
 
     __table_args__ = (

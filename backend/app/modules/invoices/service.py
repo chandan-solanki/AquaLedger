@@ -2,17 +2,21 @@ import math
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import NamedTuple
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
+from app.modules.auth.models import Tenant
 from app.modules.companies.constants import CompanyStatus
 from app.modules.companies.exceptions import CompanyNotFoundError
 from app.modules.companies.schemas import CompanyResponse
 from app.modules.companies.service import CompanyService
 from app.modules.fish.exceptions import FishNotFoundError
+from app.modules.fish.schemas import FishResponse
 from app.modules.fish.service import FishService
 from app.modules.invoices.constants import INVOICE_NUMBER_PREFIX, InvoiceStatus
 from app.modules.invoices.domain.numbering import fiscal_year_for, format_invoice_number
@@ -26,6 +30,7 @@ from app.modules.invoices.exceptions import (
     InvoiceCalculationError,
     InvoiceCompanyInactiveError,
     InvoiceCompanyNotFoundError,
+    InvoiceDocumentNotAvailableError,
     InvoiceEmptyError,
     InvoiceInsufficientInventoryError,
     InvoiceItemFishMismatchError,
@@ -59,6 +64,20 @@ from app.modules.trip_catches.exceptions import (
 )
 from app.modules.trip_catches.schemas import TripCatchResponse
 from app.modules.trip_catches.service import TripCatchService
+
+
+class InvoiceDocumentContext(NamedTuple):
+    """Everything InvoiceDocumentBuilder.build_invoice_document_data()
+    (Sprint 12 Session 2) needs, assembled by
+    InvoiceService.get_document_context() - a labeled return type
+    instead of a positional tuple, since callers need to tell an
+    InvoiceResponse apart from a CompanyResponse at the call site."""
+
+    invoice: InvoiceResponse
+    items: list[InvoiceItemResponse]
+    company: CompanyResponse
+    fish_by_id: dict[uuid.UUID, FishResponse]
+    tenant_name: str
 
 
 class InvoiceService:
@@ -133,6 +152,79 @@ class InvoiceService:
     async def get(self, invoice_id: uuid.UUID, *, tenant_id: uuid.UUID) -> InvoiceResponse:
         invoice = await self._get_or_raise(invoice_id, tenant_id)
         return self._to_response(invoice)
+
+    async def get_for_update(
+        self, invoice_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> InvoiceResponse:
+        """Row-locking counterpart of get() for the payment-allocation
+        engine (ARCHITECTURE.md §14.2: "lock each target invoice FOR
+        UPDATE"). Takes `SELECT ... FOR UPDATE` via
+        InvoiceRepository.get_by_id_for_update so a concurrent allocation
+        against this same invoice can't validate its own ceilings against a
+        stale balance_amount while this one is in flight - the lock is held
+        until the caller's transaction commits or rolls back. Callers
+        (PaymentService) share this AsyncSession, so the lock applies to
+        their outer transaction, not a separate one."""
+        invoice = await self._repo.get_by_id_for_update(invoice_id, tenant_id)
+        if invoice is None:
+            raise InvoiceNotFoundError("Invoice not found")
+        return self._to_response(invoice)
+
+    async def get_document_context(
+        self, invoice_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> InvoiceDocumentContext:
+        """Assembles everything InvoiceDocumentBuilder (Sprint 12 Session
+        2) needs to build a DocumentData for the invoice PDF - the
+        invoice itself, its active line items, the billed company's
+        profile, each sold fish's own name, and the tenant's display
+        name - entirely via existing service methods and a plain tenant-
+        name lookup (the same one-column read
+        app.modules.reports.export_dispatch._get_tenant_name already
+        does for report exports). No new repository query, no new
+        calculation - this is data retrieval only, never a transform;
+        the builder does the DTO -> DocumentData mapping.
+
+        Raises InvoiceDocumentNotAvailableError if the invoice has no
+        invoice_number yet (still DRAFT) - a formal document can't carry
+        a number that doesn't exist (ARCHITECTURE.md §13.1: numbers are
+        assigned only at issue).
+        """
+        invoice = await self._get_or_raise(invoice_id, tenant_id)
+        if invoice.invoice_number is None:
+            raise InvoiceDocumentNotAvailableError(
+                "The invoice must be issued before its document can be generated"
+            )
+
+        items = await self._repo.search_items(invoice.id, tenant_id, q=None, q_fish_ids=None)
+
+        try:
+            company = await self._company_service.get(invoice.company_id, tenant_id=tenant_id)
+        except CompanyNotFoundError as exc:
+            raise InvoiceCompanyNotFoundError("The specified company does not exist") from exc
+
+        fish_by_id: dict[uuid.UUID, FishResponse] = {}
+        for item in items:
+            if item.fish_id not in fish_by_id:
+                try:
+                    fish_by_id[item.fish_id] = await self._fish_service.get(
+                        item.fish_id, tenant_id=tenant_id
+                    )
+                except FishNotFoundError as exc:
+                    raise InvoiceItemFishNotFoundError("The specified fish does not exist") from exc
+
+        tenant_name = await self._get_tenant_name(tenant_id)
+
+        return InvoiceDocumentContext(
+            invoice=self._to_response(invoice),
+            items=[self._to_item_response(item) for item in items],
+            company=company,
+            fish_by_id=fish_by_id,
+            tenant_name=tenant_name,
+        )
+
+    async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:
+        result = await self._session.execute(select(Tenant.name).where(Tenant.id == tenant_id))
+        return result.scalar_one()
 
     async def list_invoices(
         self, *, tenant_id: uuid.UUID, params: InvoiceListParams
@@ -475,6 +567,18 @@ class InvoiceService:
         reason every other mutation in this codebase defers `_to_response`
         until after its own `_commit_or_raise`/`refresh`. Callers that need
         the recalculated invoice re-fetch it via `get()`.
+
+        Sprint 13 Session 3 concurrency fix (ARCHITECTURE.md §14.2): locks
+        the billed company FOR UPDATE (via CompanyService.get_for_update)
+        *before* summing its open invoice balances, not after - otherwise
+        two concurrent calls to this method for the same company (each
+        triggered by an allocation against a different invoice) could both
+        read that SUM before either commits, then both blindly overwrite
+        Company.outstanding_amount, losing whichever's contribution commits
+        first. This lock is acquired last in the chain, after the payment
+        and invoice locks its caller (PaymentService) already holds - see
+        CompanyService.get_for_update's docstring for why that order can't
+        deadlock.
         """
         invoice = await self._get_or_raise(invoice_id, tenant_id)
         try:
@@ -491,6 +595,7 @@ class InvoiceService:
         invoice.status = totals.status
         await self._session.flush()
 
+        await self._company_service.get_for_update(invoice.company_id, tenant_id=tenant_id)
         total_open_balance = await self._repo.sum_open_balance_by_company(
             invoice.company_id, tenant_id
         )

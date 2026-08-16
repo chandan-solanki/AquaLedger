@@ -7,6 +7,7 @@ import { useForm } from "react-hook-form";
 
 import { DatePicker, FormActions, FormGrid, FormSection, SearchableSelect, TextArea } from "@/components/form";
 import { Button } from "@/components/ui/button";
+import { useBillablePurchaseOrders } from "@/features/purchase-bills/hooks/use-billable-purchase-orders";
 import { useSupplierOptions } from "@/features/purchase-bills/hooks/use-supplier-options";
 import {
   DEFAULT_PURCHASE_BILL_FORM_VALUES,
@@ -58,6 +59,16 @@ function toIsoDateString(date: Date | undefined): string {
  * (`PurchaseBillSupplierInactiveError`) is left server-validated only,
  * mirroring how `InvoiceForm` leaves "company must be active" server-
  * validated.
+ *
+ * The optional Purchase Order field (Sprint 12 Session 12) only ever
+ * appears in Create mode (`!defaultValues`) - `purchase_order_id` is
+ * immutable after creation (no field on `PurchaseBillUpdateRequest`), so
+ * there is nothing to show or change once a bill already exists. It stays
+ * disabled until a supplier is picked (`useBillablePurchaseOrders` is
+ * supplier-scoped and already filters to confirmed/fulfilled orders only -
+ * the backend's own billable-status rule), and resets whenever the
+ * supplier changes, since a previously-selected order could belong to the
+ * old supplier.
  */
 export function PurchaseBillForm({
   defaultValues,
@@ -65,6 +76,7 @@ export function PurchaseBillForm({
   onCancel,
   submitLabel = "Save",
 }: PurchaseBillFormProps) {
+  const isEdit = Boolean(defaultValues);
   const supplierOptions = useSupplierOptions();
   const {
     handleSubmit,
@@ -77,6 +89,8 @@ export function PurchaseBillForm({
     resolver: zodResolver(purchaseBillFormSchema),
     defaultValues: defaultValues ?? DEFAULT_PURCHASE_BILL_FORM_VALUES,
   });
+  const supplierId = watch("supplier_id");
+  const billablePurchaseOrders = useBillablePurchaseOrders(supplierId || undefined);
 
   async function handleFormSubmit(values: PurchaseBillFormValues) {
     try {
@@ -101,9 +115,26 @@ export function PurchaseBillForm({
             placeholder="Select a supplier"
             options={supplierOptions.options}
             value={watch("supplier_id") || undefined}
-            onChange={(value) => value && setValue("supplier_id", value, { shouldValidate: true })}
+            onChange={(value) => {
+              if (!value) return;
+              setValue("supplier_id", value, { shouldValidate: true });
+              setValue("purchase_order_id", "");
+            }}
             error={errors.supplier_id?.message}
           />
+
+          {!isEdit && (
+            <SearchableSelect
+              label="Purchase Order"
+              description="Optional - links this bill to a confirmed or fulfilled purchase order for the selected supplier."
+              placeholder={supplierId ? "Select a purchase order (optional)" : "Select a supplier first"}
+              disabled={!supplierId}
+              options={billablePurchaseOrders.options}
+              value={watch("purchase_order_id") || undefined}
+              onChange={(value) => setValue("purchase_order_id", value ?? "", { shouldValidate: true })}
+              error={errors.purchase_order_id?.message}
+            />
+          )}
 
           <DatePicker
             label="Bill Date"

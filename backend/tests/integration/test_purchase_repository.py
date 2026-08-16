@@ -11,6 +11,8 @@ from app.modules.auth.models import Tenant
 from app.modules.purchase.constants import PurchaseStatus
 from app.modules.purchase.models import PurchaseBill, PurchaseBillItem, PurchaseSequence
 from app.modules.purchase.repository import PurchaseRepository
+from app.modules.purchase_orders.constants import PurchaseOrderStatus
+from app.modules.purchase_orders.models import PurchaseOrder
 from app.modules.suppliers.models import Supplier
 
 _BILL_DATE = date(2026, 7, 1)
@@ -53,6 +55,33 @@ async def _make_supplier(
 async def supplier_id(db_session: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
     supplier = await _make_supplier(db_session, tenant_id)
     return supplier.id
+
+
+async def _make_purchase_order(
+    db_session: AsyncSession, tenant_id: uuid.UUID, supplier_id: uuid.UUID, **overrides: Any
+) -> PurchaseOrder:
+    """purchase_bills.purchase_order_id carries a real foreign key, so a
+    test that links a bill to a purchase order needs an actual row here -
+    a bare `uuid.uuid4()` fails with a ForeignKeyViolationError."""
+    defaults: dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "supplier_id": supplier_id,
+        "order_date": _BILL_DATE,
+        "status": PurchaseOrderStatus.CONFIRMED,
+        "subtotal": Decimal("0"),
+        "discount_amount": Decimal("0"),
+        "taxable_amount": Decimal("0"),
+        "tax_amount": Decimal("0"),
+        "transport_charge": Decimal("0"),
+        "other_charge": Decimal("0"),
+        "round_off": Decimal("0"),
+        "total_amount": Decimal("0"),
+    }
+    defaults.update(overrides)
+    order = PurchaseOrder(**defaults)
+    db_session.add(order)
+    await db_session.commit()
+    return order
 
 
 async def _make_bill(
@@ -1051,3 +1080,88 @@ class TestSumOpenBalanceBySupplier:
             balance_amount=Decimal("500.00"),
         )
         assert await repo.sum_open_balance_by_supplier(supplier_id, uuid.uuid4()) == Decimal("0")
+
+
+class TestListByPurchaseOrder:
+    """PurchaseRepository.list_by_purchase_order (Sprint 12 Session 13) -
+    backs GET /purchase-orders/{id}/purchase-bills."""
+
+    async def test_returns_bills_linked_to_the_order_most_recent_first(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        order = await _make_purchase_order(db_session, tenant_id, supplier_id)
+        older = await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            purchase_order_id=order.id,
+            bill_date=date(2026, 7, 1),
+        )
+        newer = await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            purchase_order_id=order.id,
+            bill_date=date(2026, 7, 15),
+        )
+
+        bills = await repo.list_by_purchase_order(order.id, tenant_id)
+        assert [b.id for b in bills] == [newer.id, older.id]
+
+    async def test_excludes_bills_linked_to_a_different_order(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        order = await _make_purchase_order(db_session, tenant_id, supplier_id)
+        other_order = await _make_purchase_order(db_session, tenant_id, supplier_id)
+        linked = await _make_bill(db_session, tenant_id, supplier_id, purchase_order_id=order.id)
+        await _make_bill(db_session, tenant_id, supplier_id, purchase_order_id=other_order.id)
+        await _make_bill(db_session, tenant_id, supplier_id)  # standalone, no PO link
+
+        bills = await repo.list_by_purchase_order(order.id, tenant_id)
+        assert [b.id for b in bills] == [linked.id]
+
+    async def test_excludes_soft_deleted_bills(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        order = await _make_purchase_order(db_session, tenant_id, supplier_id)
+        await _make_bill(
+            db_session,
+            tenant_id,
+            supplier_id,
+            purchase_order_id=order.id,
+            deleted_at=datetime.now(UTC),
+        )
+        assert await repo.list_by_purchase_order(order.id, tenant_id) == []
+
+    async def test_scoped_to_tenant(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        order = await _make_purchase_order(db_session, tenant_id, supplier_id)
+        await _make_bill(db_session, tenant_id, supplier_id, purchase_order_id=order.id)
+        assert await repo.list_by_purchase_order(order.id, uuid.uuid4()) == []
+
+    async def test_empty_when_no_bills_linked(
+        self,
+        repo: PurchaseRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        supplier_id: uuid.UUID,
+    ) -> None:
+        order = await _make_purchase_order(db_session, tenant_id, supplier_id)
+        assert await repo.list_by_purchase_order(order.id, tenant_id) == []

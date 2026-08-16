@@ -7,11 +7,17 @@ export type PurchaseBillStatus = "draft" | "posted" | "partially_paid" | "paid" 
  * the backend serializes `Decimal` as a JSON string, never a float
  * (ARCHITECTURE.md §5.1). There is no nested `items` array here - line
  * items are a separate sub-resource (`GET /purchase/{id}/items`).
+ *
+ * `purchase_order_id` (Sprint 12 Session 12) is the optional originating
+ * purchase order - null for a standalone bill. Set once, at creation
+ * (`PurchaseBillCreateRequest`), and never changed afterward - there is no
+ * corresponding field on `PurchaseBillUpdateRequest`.
  */
 export interface BackendPurchaseBill {
   id: string;
   tenant_id: string;
   supplier_id: string;
+  purchase_order_id: string | null;
   bill_number: string | null;
   bill_date: string;
   due_date: string | null;
@@ -37,6 +43,7 @@ export interface PurchaseBill {
   id: string;
   tenantId: string;
   supplierId: string;
+  purchaseOrderId: string | null;
   billNumber: string | null;
   billDate: string;
   dueDate: string | null;
@@ -62,6 +69,7 @@ export function mapBackendPurchaseBill(bill: BackendPurchaseBill): PurchaseBill 
     id: bill.id,
     tenantId: bill.tenant_id,
     supplierId: bill.supplier_id,
+    purchaseOrderId: bill.purchase_order_id,
     billNumber: bill.bill_number,
     billDate: bill.bill_date,
     dueDate: bill.due_date,
@@ -113,9 +121,17 @@ export interface PurchaseBillListParams {
  * 0 and is server-owned, computed once line items exist. `bill_number`/
  * `status`/`posted_at` are never client-supplied either - numbers are
  * assigned only at posting (not yet wired up on this frontend).
+ *
+ * `purchase_order_id` (Sprint 12 Session 12) is optional and set-once: the
+ * linked purchase order must belong to the same supplier and be
+ * `confirmed`/`fulfilled` (422 otherwise, app/modules/purchase/service.py's
+ * `_validate_purchase_order_link`) - there is no equivalent field on
+ * `PurchaseBillUpdateRequest`, so a bill can never be re-linked or unlinked
+ * after creation.
  */
 export interface PurchaseBillCreateRequest {
   supplier_id: string;
+  purchase_order_id?: string;
   bill_date: string;
   due_date?: string;
   remarks?: string;
@@ -126,6 +142,7 @@ export interface PurchaseBillCreateRequest {
  * partial update, only present fields change. Only `draft` purchase bills
  * may be updated (409 `PURCHASE_BILL_NOT_DRAFT` otherwise - posted/
  * partially_paid/paid/cancelled bills are immutable, see
- * app/modules/purchase/service.py's `_ensure_draft`).
+ * app/modules/purchase/service.py's `_ensure_draft`). Deliberately omits
+ * `purchase_order_id` - it is immutable after creation.
  */
-export type PurchaseBillUpdateRequest = Partial<PurchaseBillCreateRequest>;
+export type PurchaseBillUpdateRequest = Partial<Omit<PurchaseBillCreateRequest, "purchase_order_id">>;

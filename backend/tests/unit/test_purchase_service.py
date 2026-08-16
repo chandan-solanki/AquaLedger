@@ -80,6 +80,16 @@ class _FakeSupplierService:
         assert self._supplier is not None
         return self._supplier
 
+    async def get_for_update(
+        self, supplier_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> SupplierResponse | None:
+        # Stands in for the Sprint 13 Session 3 concurrency fix's row lock -
+        # recalculate_payment_totals calls this before summing, but never
+        # reads its return value (see SupplierService.get_for_update's
+        # docstring), so this fake just records the call.
+        self.get_calls.append((supplier_id, tenant_id))
+        return self._supplier
+
     async def find_ids_by_name(self, tenant_id: uuid.UUID, q: str) -> list[uuid.UUID]:
         self.find_ids_by_name_calls.append((tenant_id, q))
         return self._name_matches

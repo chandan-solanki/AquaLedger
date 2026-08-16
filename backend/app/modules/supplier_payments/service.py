@@ -2,16 +2,20 @@ import math
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import NamedTuple
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
+from app.modules.auth.models import Tenant
 from app.modules.purchase.constants import PurchaseStatus
 from app.modules.purchase.exceptions import PurchaseBillNotFoundError
 from app.modules.purchase.schemas import PurchaseBillResponse
 from app.modules.purchase.service import PurchaseService
+from app.modules.purchase_orders.service import PurchaseOrderService
 from app.modules.supplier_payments.constants import (
     SUPPLIER_PAYMENT_NUMBER_PREFIX,
     SupplierPaymentStatus,
@@ -31,6 +35,7 @@ from app.modules.supplier_payments.exceptions import (
     SupplierPaymentAllocationNotFoundError,
     SupplierPaymentAllocationPaymentNotDraftError,
     SupplierPaymentAllocationPurchaseBillNotFoundError,
+    SupplierPaymentDocumentNotAvailableError,
     SupplierPaymentNoAllocationsError,
     SupplierPaymentNotDraftError,
     SupplierPaymentNotFoundError,
@@ -73,6 +78,31 @@ _ALLOCATION_EDITABLE_PURCHASE_BILL_STATUSES = _ALLOCATABLE_PURCHASE_BILL_STATUSE
 }
 
 
+class SupplierPaymentAllocationDisplay(NamedTuple):
+    """One allocation, resolved to a display-friendly purchase_bill_number
+    (Sprint 12 Session 4) - `SupplierPaymentAllocationResponse` only
+    carries `purchase_bill_id` (a raw UUID), which is never shown on a
+    receipt. Every purchase bill an allocation can reference is POSTED
+    or beyond (allocation requires `_ALLOCATABLE_PURCHASE_BILL_STATUSES`),
+    so `bill_number` is always assigned by the time this is built.
+    Mirrors PaymentAllocationDisplay."""
+
+    purchase_bill_number: str
+    allocated_amount: Decimal
+
+
+class SupplierPaymentDocumentContext(NamedTuple):
+    """Everything SupplierPaymentDocumentBuilder.build_supplier_payment_receipt_document_data()
+    (Sprint 12 Session 4) needs, assembled by
+    SupplierPaymentService.get_document_context() - a labeled return
+    type instead of a positional tuple, mirroring PaymentDocumentContext."""
+
+    supplier_payment: SupplierPaymentResponse
+    supplier: SupplierResponse
+    allocations: list[SupplierPaymentAllocationDisplay]
+    tenant_name: str
+
+
 class SupplierPaymentService:
     """Sprint 12 Session 2 - draft supplier payment CRUD; Session 3 - the
     payment allocation engine; Session 4 - the outstanding reconciliation
@@ -109,7 +139,9 @@ class SupplierPaymentService:
         # Cross-module reference validation goes through the other module's
         # service, never its repository (ARCHITECTURE.md §2).
         self._supplier_service = SupplierService(session)
-        self._purchase_service = PurchaseService(session)
+        self._purchase_service = PurchaseService(
+            session, purchase_order_service=PurchaseOrderService(session)
+        )
 
     async def create(
         self,
@@ -150,6 +182,66 @@ class SupplierPaymentService:
     ) -> SupplierPaymentResponse:
         supplier_payment = await self._get_or_raise(supplier_payment_id, tenant_id)
         return self._to_response(supplier_payment)
+
+    async def get_document_context(
+        self, supplier_payment_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> SupplierPaymentDocumentContext:
+        """Assembles everything SupplierPaymentDocumentBuilder (Sprint 12
+        Session 4) needs to build a DocumentData for the supplier
+        payment receipt PDF - the payment itself, the paying-to
+        supplier's profile, each allocation resolved to its
+        bill_number, and the tenant's display name - entirely via
+        existing service methods and a plain tenant-name lookup
+        (mirrors PaymentService.get_document_context exactly). No new
+        repository query, no new calculation - this is data retrieval
+        only, never a transform; the builder does the DTO ->
+        DocumentData mapping.
+
+        Raises SupplierPaymentDocumentNotAvailableError if the payment
+        has no payment_number yet (still DRAFT) - a formal receipt
+        can't carry a number that doesn't exist (numbers are assigned
+        only at posting).
+        """
+        supplier_payment = await self._get_or_raise(supplier_payment_id, tenant_id)
+        if supplier_payment.payment_number is None:
+            raise SupplierPaymentDocumentNotAvailableError(
+                "The supplier payment must be posted before its document can be generated"
+            )
+
+        try:
+            supplier = await self._supplier_service.get(
+                supplier_payment.supplier_id, tenant_id=tenant_id
+            )
+        except SupplierNotFoundError as exc:
+            raise SupplierPaymentSupplierNotFoundError(
+                "The specified supplier does not exist"
+            ) from exc
+
+        allocations = await self.list_allocations(supplier_payment_id, tenant_id=tenant_id)
+        allocation_displays = []
+        for allocation in allocations:
+            purchase_bill = await self._purchase_service.get(
+                allocation.purchase_bill_id, tenant_id=tenant_id
+            )
+            allocation_displays.append(
+                SupplierPaymentAllocationDisplay(
+                    purchase_bill_number=purchase_bill.bill_number or "-",
+                    allocated_amount=allocation.allocated_amount,
+                )
+            )
+
+        tenant_name = await self._get_tenant_name(tenant_id)
+
+        return SupplierPaymentDocumentContext(
+            supplier_payment=self._to_response(supplier_payment),
+            supplier=supplier,
+            allocations=allocation_displays,
+            tenant_name=tenant_name,
+        )
+
+    async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:
+        result = await self._session.execute(select(Tenant.name).where(Tenant.id == tenant_id))
+        return result.scalar_one()
 
     async def list_supplier_payments(
         self, *, tenant_id: uuid.UUID, params: SupplierPaymentListParams
@@ -233,7 +325,16 @@ class SupplierPaymentService:
         tenant_id: uuid.UUID,
         actor_id: uuid.UUID,
     ) -> SupplierPaymentAllocationResponse:
-        supplier_payment = await self._get_or_raise(supplier_payment_id, tenant_id)
+        # Concurrency fix (Sprint 13 Session 2, ARCHITECTURE.md §14.2): lock
+        # the supplier payment, then the target purchase bill, FOR UPDATE -
+        # in that fixed order - before reading either's remaining capacity.
+        # Without this, two concurrent allocations against the same bill
+        # (or the same payment) could each validate against the same stale
+        # balance_amount/unallocated_amount and both succeed, over-
+        # allocating past a real ceiling. Mirrors PaymentService.
+        # create_allocation exactly. See _ensure_purchase_bill_allocatable /
+        # PurchaseService.get_for_update.
+        supplier_payment = await self._get_for_update_or_raise(supplier_payment_id, tenant_id)
         self._ensure_draft_for_allocation(supplier_payment)
         purchase_bill = await self._ensure_purchase_bill_allocatable(
             payload.purchase_bill_id, tenant_id
@@ -276,7 +377,9 @@ class SupplierPaymentService:
         *,
         tenant_id: uuid.UUID,
     ) -> SupplierPaymentAllocationResponse:
-        supplier_payment = await self._get_or_raise(supplier_payment_id, tenant_id)
+        # Concurrency fix (Sprint 13 Session 2, ARCHITECTURE.md §14.2): lock
+        # the supplier payment first, same as create_allocation.
+        supplier_payment = await self._get_for_update_or_raise(supplier_payment_id, tenant_id)
         self._ensure_draft_for_allocation(supplier_payment)
         allocation = await self._get_allocation_or_raise(
             allocation_id, supplier_payment_id, tenant_id
@@ -288,15 +391,31 @@ class SupplierPaymentService:
         new_allocated_amount = update_data.get("allocated_amount", allocation.allocated_amount)
         bill_unchanged = new_purchase_bill_id == old_purchase_bill_id
 
-        # Editing (or removing money from) the same bill this allocation
-        # already targets must stay possible even if that bill is now PAID -
-        # possibly *because* this very allocation filled it (see
+        # Lock every purchase bill this mutation reads-then-writes - not
+        # only the one being validated - in a fixed ascending-id order, so
+        # two concurrent reassignments crossing the same pair of bills in
+        # opposite directions can never deadlock (ARCHITECTURE.md §14.2:
+        # "ordered by invoice.id to prevent deadlocks between concurrent
+        # allocations", mirrored here for bills). Editing (or removing
+        # money from) the same bill this allocation already targets must
+        # stay possible even if that bill is now PAID - possibly *because*
+        # this very allocation filled it (see
         # _ALLOCATION_EDITABLE_PURCHASE_BILL_STATUSES's docstring).
         # Retargeting onto a different bill is treated as attaching new
-        # money to it, so that bill must still be open.
-        purchase_bill = await self._ensure_purchase_bill_allocatable(
-            new_purchase_bill_id, tenant_id, allow_paid=bill_unchanged
-        )
+        # money to it, so that bill must still be open; the old bill needs
+        # no status check - only its lock, so its own later recalculation
+        # in this same transaction can't race a concurrent writer.
+        bill_by_id: dict[uuid.UUID, PurchaseBillResponse] = {}
+        for locked_bill_id in sorted({old_purchase_bill_id, new_purchase_bill_id}):
+            if locked_bill_id == new_purchase_bill_id:
+                bill_by_id[locked_bill_id] = await self._ensure_purchase_bill_allocatable(
+                    new_purchase_bill_id, tenant_id, allow_paid=bill_unchanged
+                )
+            else:
+                bill_by_id[locked_bill_id] = await self._purchase_service.get_for_update(
+                    locked_bill_id, tenant_id=tenant_id
+                )
+        purchase_bill = bill_by_id[new_purchase_bill_id]
 
         # The amount currently locked in by *this* allocation is already
         # reflected in payment.unallocated_amount - and, if the bill is
@@ -327,12 +446,18 @@ class SupplierPaymentService:
     async def delete_allocation(
         self, supplier_payment_id: uuid.UUID, allocation_id: uuid.UUID, *, tenant_id: uuid.UUID
     ) -> None:
-        supplier_payment = await self._get_or_raise(supplier_payment_id, tenant_id)
+        # Concurrency fix (Sprint 13 Session 2, ARCHITECTURE.md §14.2): lock
+        # the supplier payment, then the purchase bill being freed, same
+        # order as create_allocation/update_allocation - so this deletion's
+        # own recalculation of the bill can't race a concurrent allocation
+        # against it.
+        supplier_payment = await self._get_for_update_or_raise(supplier_payment_id, tenant_id)
         self._ensure_draft_for_allocation(supplier_payment)
         allocation = await self._get_allocation_or_raise(
             allocation_id, supplier_payment_id, tenant_id
         )
         purchase_bill_id = allocation.purchase_bill_id
+        await self._purchase_service.get_for_update(purchase_bill_id, tenant_id=tenant_id)
         await self._repo.delete_allocation(allocation)
         await self._session.flush()
         await self._recalculate_supplier_payment_allocation_totals(supplier_payment, tenant_id)
@@ -503,12 +628,16 @@ class SupplierPaymentService:
     async def _ensure_purchase_bill_allocatable(
         self, purchase_bill_id: uuid.UUID, tenant_id: uuid.UUID, *, allow_paid: bool = False
     ) -> PurchaseBillResponse:
-        # PurchaseService.get() is already tenant-scoped, so a purchase bill
-        # belonging to another tenant surfaces as "not found" here too - the
-        # same "must belong to the current tenant" rule
-        # _ensure_supplier_active applies to suppliers.
+        # PurchaseService.get_for_update() is already tenant-scoped, so a
+        # purchase bill belonging to another tenant surfaces as "not found"
+        # here too - the same "must belong to the current tenant" rule
+        # _ensure_supplier_active applies to suppliers. Locked (`SELECT ...
+        # FOR UPDATE`), not a plain get() - see create_allocation's
+        # docstring comment for why (Sprint 13 Session 2 concurrency fix).
         try:
-            purchase_bill = await self._purchase_service.get(purchase_bill_id, tenant_id=tenant_id)
+            purchase_bill = await self._purchase_service.get_for_update(
+                purchase_bill_id, tenant_id=tenant_id
+            )
         except PurchaseBillNotFoundError as exc:
             raise SupplierPaymentAllocationPurchaseBillNotFoundError(
                 "The specified purchase bill does not exist"
@@ -620,6 +749,22 @@ class SupplierPaymentService:
         self, supplier_payment_id: uuid.UUID, tenant_id: uuid.UUID
     ) -> SupplierPayment:
         supplier_payment = await self._repo.get_by_id(supplier_payment_id, tenant_id)
+        if supplier_payment is None:
+            raise SupplierPaymentNotFoundError("Supplier payment not found")
+        return supplier_payment
+
+    async def _get_for_update_or_raise(
+        self, supplier_payment_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> SupplierPayment:
+        """Locked counterpart of _get_or_raise, for the allocation-mutating
+        methods only (create_allocation/update_allocation/
+        delete_allocation) - mirrors the `get_by_id_for_update` pattern
+        post() already uses, so a concurrent allocation attempt against the
+        same supplier payment can't validate against a stale
+        unallocated_amount while this one is in flight (Sprint 13 Session 2
+        concurrency fix, ARCHITECTURE.md §14.2). Mirrors
+        PaymentService._get_for_update_or_raise exactly."""
+        supplier_payment = await self._repo.get_by_id_for_update(supplier_payment_id, tenant_id)
         if supplier_payment is None:
             raise SupplierPaymentNotFoundError("Supplier payment not found")
         return supplier_payment

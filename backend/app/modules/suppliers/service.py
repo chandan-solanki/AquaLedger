@@ -128,6 +128,21 @@ class SupplierService:
         SupplierRepository.find_ids_by_name."""
         return await self._repo.find_ids_by_name(tenant_id, f"%{q.strip()}%")
 
+    async def get_for_update(
+        self, supplier_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> SupplierResponse | None:
+        """Row-locking counterpart of get(), for recalculate_outstanding's
+        caller (PurchaseService.recalculate_payment_totals) to call *before*
+        summing this supplier's open purchase bill balances - the Sprint 13
+        Session 3 fix for the outstanding-cache lost-update race. Mirrors
+        CompanyService.get_for_update exactly, including returning None
+        (rather than raising) if the supplier is missing - see that
+        method's docstring for the full rationale on both points."""
+        supplier = await self._repo.get_by_id_for_update(supplier_id, tenant_id)
+        if supplier is None:
+            return None
+        return self._to_response(supplier)
+
     async def increase_outstanding(
         self, supplier_id: uuid.UUID, amount: Decimal, *, tenant_id: uuid.UUID
     ) -> None:

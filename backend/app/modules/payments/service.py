@@ -2,12 +2,15 @@ import math
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import NamedTuple
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
+from app.modules.auth.models import Tenant
 from app.modules.companies.constants import CompanyStatus
 from app.modules.companies.exceptions import CompanyNotFoundError
 from app.modules.companies.schemas import CompanyResponse
@@ -32,6 +35,7 @@ from app.modules.payments.exceptions import (
     PaymentAllocationPaymentNotDraftError,
     PaymentCompanyInactiveError,
     PaymentCompanyNotFoundError,
+    PaymentDocumentNotAvailableError,
     PaymentNoAllocationsError,
     PaymentNotDraftError,
     PaymentNotFoundError,
@@ -60,6 +64,31 @@ _ALLOCATABLE_INVOICE_STATUSES = frozenset({InvoiceStatus.ISSUED, InvoiceStatus.P
 # *different* invoice, still requires _ALLOCATABLE_INVOICE_STATUSES - that
 # invoice must still have an open balance to receive money against.
 _ALLOCATION_EDITABLE_INVOICE_STATUSES = _ALLOCATABLE_INVOICE_STATUSES | {InvoiceStatus.PAID}
+
+
+class PaymentAllocationDisplay(NamedTuple):
+    """One allocation, resolved to a display-friendly invoice_number
+    (Sprint 12 Session 4) - `PaymentAllocationResponse` only carries
+    `invoice_id` (a raw UUID), which is never shown on a receipt. Every
+    invoice an allocation can reference is ISSUED or beyond (allocation
+    requires `_ALLOCATABLE_INVOICE_STATUSES`), so `invoice_number` is
+    always assigned by the time this is built."""
+
+    invoice_number: str
+    allocated_amount: Decimal
+
+
+class PaymentDocumentContext(NamedTuple):
+    """Everything PaymentDocumentBuilder.build_customer_payment_receipt_document_data()
+    (Sprint 12 Session 4) needs, assembled by
+    PaymentService.get_document_context() - a labeled return type
+    instead of a positional tuple, mirroring InvoiceDocumentContext/
+    PurchaseBillDocumentContext."""
+
+    payment: PaymentResponse
+    company: CompanyResponse
+    allocations: list[PaymentAllocationDisplay]
+    tenant_name: str
 
 
 class PaymentService:
@@ -128,6 +157,60 @@ class PaymentService:
     async def get(self, payment_id: uuid.UUID, *, tenant_id: uuid.UUID) -> PaymentResponse:
         payment = await self._get_or_raise(payment_id, tenant_id)
         return self._to_response(payment)
+
+    async def get_document_context(
+        self, payment_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> PaymentDocumentContext:
+        """Assembles everything PaymentDocumentBuilder (Sprint 12 Session
+        4) needs to build a DocumentData for the customer payment
+        receipt PDF - the payment itself, the paying company's profile,
+        each allocation resolved to its invoice_number, and the
+        tenant's display name - entirely via existing service methods
+        and a plain tenant-name lookup (mirrors
+        InvoiceService.get_document_context /
+        PurchaseService.get_document_context exactly). No new repository
+        query, no new calculation - this is data retrieval only, never
+        a transform; the builder does the DTO -> DocumentData mapping.
+
+        Raises PaymentDocumentNotAvailableError if the payment has no
+        payment_number yet (still DRAFT) - a formal receipt can't carry
+        a number that doesn't exist (numbers are assigned only at
+        posting).
+        """
+        payment = await self._get_or_raise(payment_id, tenant_id)
+        if payment.payment_number is None:
+            raise PaymentDocumentNotAvailableError(
+                "The payment must be posted before its document can be generated"
+            )
+
+        try:
+            company = await self._company_service.get(payment.company_id, tenant_id=tenant_id)
+        except CompanyNotFoundError as exc:
+            raise PaymentCompanyNotFoundError("The specified company does not exist") from exc
+
+        allocations = await self.list_allocations(payment_id, tenant_id=tenant_id)
+        allocation_displays = []
+        for allocation in allocations:
+            invoice = await self._invoice_service.get(allocation.invoice_id, tenant_id=tenant_id)
+            allocation_displays.append(
+                PaymentAllocationDisplay(
+                    invoice_number=invoice.invoice_number or "-",
+                    allocated_amount=allocation.allocated_amount,
+                )
+            )
+
+        tenant_name = await self._get_tenant_name(tenant_id)
+
+        return PaymentDocumentContext(
+            payment=self._to_response(payment),
+            company=company,
+            allocations=allocation_displays,
+            tenant_name=tenant_name,
+        )
+
+    async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:
+        result = await self._session.execute(select(Tenant.name).where(Tenant.id == tenant_id))
+        return result.scalar_one()
 
     async def list_payments(
         self, *, tenant_id: uuid.UUID, params: PaymentListParams
@@ -210,7 +293,15 @@ class PaymentService:
         tenant_id: uuid.UUID,
         actor_id: uuid.UUID,
     ) -> PaymentAllocationResponse:
-        payment = await self._get_or_raise(payment_id, tenant_id)
+        # Concurrency fix (Sprint 13 Session 2, ARCHITECTURE.md §14.2): lock
+        # the payment, then the target invoice, FOR UPDATE - in that fixed
+        # order - before reading either's remaining capacity. Without this,
+        # two concurrent allocations against the same invoice (or the same
+        # payment) could each validate against the same stale
+        # balance_amount/unallocated_amount and both succeed, over-
+        # allocating past a real ceiling. See _ensure_invoice_allocatable /
+        # InvoiceService.get_for_update.
+        payment = await self._get_for_update_or_raise(payment_id, tenant_id)
         self._ensure_draft_for_allocation(payment)
         invoice = await self._ensure_invoice_allocatable(payload.invoice_id, tenant_id)
         self._validate_allocation_ceilings(
@@ -251,7 +342,9 @@ class PaymentService:
         *,
         tenant_id: uuid.UUID,
     ) -> PaymentAllocationResponse:
-        payment = await self._get_or_raise(payment_id, tenant_id)
+        # Concurrency fix (Sprint 13 Session 2, ARCHITECTURE.md §14.2): lock
+        # the payment first, same as create_allocation.
+        payment = await self._get_for_update_or_raise(payment_id, tenant_id)
         self._ensure_draft_for_allocation(payment)
         allocation = await self._get_allocation_or_raise(allocation_id, payment_id, tenant_id)
         update_data = payload.model_dump(exclude_unset=True)
@@ -261,15 +354,31 @@ class PaymentService:
         new_allocated_amount = update_data.get("allocated_amount", allocation.allocated_amount)
         invoice_unchanged = new_invoice_id == old_invoice_id
 
-        # Editing (or removing money from) the same invoice this allocation
-        # already targets must stay possible even if that invoice is now
-        # PAID - possibly *because* this very allocation filled it (see
-        # _ALLOCATION_EDITABLE_INVOICE_STATUSES's docstring). Retargeting
-        # onto a different invoice is treated as attaching new money to it,
-        # so that invoice must still be open.
-        invoice = await self._ensure_invoice_allocatable(
-            new_invoice_id, tenant_id, allow_paid=invoice_unchanged
-        )
+        # Lock every invoice this mutation reads-then-writes - not only the
+        # one being validated - in a fixed ascending-id order, so two
+        # concurrent reassignments crossing the same pair of invoices in
+        # opposite directions can never deadlock (ARCHITECTURE.md §14.2:
+        # "ordered by invoice.id to prevent deadlocks between concurrent
+        # allocations"). Editing (or removing money from) the same invoice
+        # this allocation already targets must stay possible even if that
+        # invoice is now PAID - possibly *because* this very allocation
+        # filled it (see _ALLOCATION_EDITABLE_INVOICE_STATUSES's
+        # docstring). Retargeting onto a different invoice is treated as
+        # attaching new money to it, so that invoice must still be open;
+        # the old invoice needs no status check - only its lock, so its own
+        # later recalculation in this same transaction can't race a
+        # concurrent writer.
+        invoice_by_id: dict[uuid.UUID, InvoiceResponse] = {}
+        for locked_invoice_id in sorted({old_invoice_id, new_invoice_id}):
+            if locked_invoice_id == new_invoice_id:
+                invoice_by_id[locked_invoice_id] = await self._ensure_invoice_allocatable(
+                    new_invoice_id, tenant_id, allow_paid=invoice_unchanged
+                )
+            else:
+                invoice_by_id[locked_invoice_id] = await self._invoice_service.get_for_update(
+                    locked_invoice_id, tenant_id=tenant_id
+                )
+        invoice = invoice_by_id[new_invoice_id]
 
         # The amount currently locked in by *this* allocation is already
         # reflected in payment.unallocated_amount - and, if the invoice is
@@ -300,10 +409,16 @@ class PaymentService:
     async def delete_allocation(
         self, payment_id: uuid.UUID, allocation_id: uuid.UUID, *, tenant_id: uuid.UUID
     ) -> None:
-        payment = await self._get_or_raise(payment_id, tenant_id)
+        # Concurrency fix (Sprint 13 Session 2, ARCHITECTURE.md §14.2): lock
+        # the payment, then the invoice being freed, same order as
+        # create_allocation/update_allocation - so this deletion's own
+        # recalculation of the invoice can't race a concurrent allocation
+        # against it.
+        payment = await self._get_for_update_or_raise(payment_id, tenant_id)
         self._ensure_draft_for_allocation(payment)
         allocation = await self._get_allocation_or_raise(allocation_id, payment_id, tenant_id)
         invoice_id = allocation.invoice_id
+        await self._invoice_service.get_for_update(invoice_id, tenant_id=tenant_id)
         await self._repo.delete_allocation(allocation)
         await self._session.flush()
         await self._recalculate_payment_allocation_totals(payment, tenant_id)
@@ -457,12 +572,14 @@ class PaymentService:
     async def _ensure_invoice_allocatable(
         self, invoice_id: uuid.UUID, tenant_id: uuid.UUID, *, allow_paid: bool = False
     ) -> InvoiceResponse:
-        # InvoiceService.get() is already tenant-scoped, so an invoice
-        # belonging to another tenant surfaces as "not found" here too -
-        # the same "must belong to the current tenant" rule
-        # _ensure_company_active applies to companies.
+        # InvoiceService.get_for_update() is already tenant-scoped, so an
+        # invoice belonging to another tenant surfaces as "not found" here
+        # too - the same "must belong to the current tenant" rule
+        # _ensure_company_active applies to companies. Locked (`SELECT ...
+        # FOR UPDATE`), not a plain get() - see create_allocation's
+        # docstring comment for why (Sprint 13 Session 2 concurrency fix).
         try:
-            invoice = await self._invoice_service.get(invoice_id, tenant_id=tenant_id)
+            invoice = await self._invoice_service.get_for_update(invoice_id, tenant_id=tenant_id)
         except InvoiceNotFoundError as exc:
             raise PaymentAllocationInvoiceNotFoundError(
                 "The specified invoice does not exist"
@@ -558,6 +675,21 @@ class PaymentService:
 
     async def _get_or_raise(self, payment_id: uuid.UUID, tenant_id: uuid.UUID) -> Payment:
         payment = await self._repo.get_by_id(payment_id, tenant_id)
+        if payment is None:
+            raise PaymentNotFoundError("Payment not found")
+        return payment
+
+    async def _get_for_update_or_raise(
+        self, payment_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> Payment:
+        """Locked counterpart of _get_or_raise, for the allocation-mutating
+        methods only (create_allocation/update_allocation/
+        delete_allocation) - mirrors the `get_by_id_for_update` pattern
+        post() already uses, so a concurrent allocation attempt against the
+        same payment can't validate against a stale unallocated_amount
+        while this one is in flight (Sprint 13 Session 2 concurrency fix,
+        ARCHITECTURE.md §14.2)."""
+        payment = await self._repo.get_by_id_for_update(payment_id, tenant_id)
         if payment is None:
             raise PaymentNotFoundError("Payment not found")
         return payment

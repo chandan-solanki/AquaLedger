@@ -131,6 +131,40 @@ class CompanyService:
         CompanyRepository.find_ids_by_name."""
         return await self._repo.find_ids_by_name(tenant_id, f"%{q.strip()}%")
 
+    async def get_for_update(
+        self, company_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> CompanyResponse | None:
+        """Row-locking counterpart of get(), for recalculate_outstanding's
+        caller (InvoiceService.recalculate_payment_totals) to call *before*
+        summing this company's open invoice balances - the Sprint 13 Session
+        3 fix for the outstanding-cache lost-update race (ARCHITECTURE.md
+        §14.2). Without this lock, two concurrent recomputes for the same
+        company (each triggered by a different invoice) can each read the
+        SUM before either commits, then both blindly overwrite
+        outstanding_amount via set_outstanding_amount - whichever commits
+        last wins, silently discarding the other's contribution. Taking
+        `SELECT ... FOR UPDATE` here first forces the second recompute to
+        block until the first's transaction commits, so its own subsequent
+        SUM read reflects the first's already-committed change.
+
+        Acquired only *after* the payment/invoice locks the caller already
+        holds (Sprint 13 Session 2, ARCHITECTURE.md §14.2's `lock payment
+        FOR UPDATE; lock each target invoice FOR UPDATE`) - company is always
+        the last lock taken in this chain, never the first, so this can't
+        reverse an existing lock order and deadlock against it.
+
+        Returns None rather than raising if the company is missing (e.g.
+        soft-deleted while an old invoice still references it) - unlike
+        get_for_update on Invoice/PurchaseBill, there is no user-facing 404
+        to report here; set_outstanding_amount's own blind UPDATE already
+        tolerates a non-matching row as a no-op, so this preserves that same
+        tolerance instead of introducing a new failure mode for what was
+        already silently accepted."""
+        company = await self._repo.get_by_id_for_update(company_id, tenant_id)
+        if company is None:
+            return None
+        return self._to_response(company)
+
     async def increase_outstanding(
         self, company_id: uuid.UUID, amount: Decimal, *, tenant_id: uuid.UUID
     ) -> None:

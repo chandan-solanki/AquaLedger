@@ -31,6 +31,8 @@ import { normalizeApiError } from "@/utils/api-error";
 export interface PurchaseBillItemTableProps {
   purchaseBillId: string;
   purchaseBillStatus: PurchaseBillStatus;
+  /** The parent bill's own linked purchase order (Sprint 12 Session 12), if any - passed through to `PurchaseBillItemForm` for its optional "Purchase Order Item" selector. */
+  purchaseOrderId: string | null;
 }
 
 /**
@@ -48,7 +50,11 @@ export interface PurchaseBillItemTableProps {
  * of status, matching the backend's own "allowed regardless of bill status"
  * list behavior.
  */
-export function PurchaseBillItemTable({ purchaseBillId, purchaseBillStatus }: PurchaseBillItemTableProps) {
+export function PurchaseBillItemTable({
+  purchaseBillId,
+  purchaseBillStatus,
+  purchaseOrderId,
+}: PurchaseBillItemTableProps) {
   const { hasPermission } = usePermissions();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [pendingEditId, setPendingEditId] = useState<string | null>(null);
@@ -136,6 +142,7 @@ export function PurchaseBillItemTable({ purchaseBillId, purchaseBillStatus }: Pu
             onSubmit={handleCreateSubmit}
             onCancel={() => setIsCreateOpen(false)}
             submitLabel="Add Item"
+            purchaseOrderId={purchaseOrderId}
           />
         </DialogContent>
       </Dialog>
@@ -151,6 +158,7 @@ export function PurchaseBillItemTable({ purchaseBillId, purchaseBillStatus }: Pu
               onSubmit={handleEditSubmit}
               onCancel={() => setPendingEditId(null)}
               submitLabel="Save Changes"
+              purchaseOrderId={purchaseOrderId}
             />
           )}
         </DialogContent>

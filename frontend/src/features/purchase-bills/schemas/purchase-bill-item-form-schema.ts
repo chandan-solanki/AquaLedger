@@ -57,6 +57,14 @@ const percentField = z
  * here - every one of those is server-computed and never accepted on
  * create/update; they are read-only, rendered only in
  * `PurchaseBillItemTable`'s columns from the server's own response.
+ *
+ * `purchase_order_item_id` (Sprint 12 Session 12) is an empty-string
+ * sentinel for "not billing against a specific purchase order item" - only
+ * ever shown by `PurchaseBillItemForm` when the parent bill itself has a
+ * linked purchase order. The backend, not this form, enforces that the
+ * quantity entered never exceeds that item's own remaining quantity
+ * (`PURCHASE_BILL_OVER_BILLING`) - this form does not attempt to replicate
+ * that check client-side.
  */
 export const purchaseBillItemFormSchema = z.object({
   description: z.string().trim().min(1, "Description is required"),
@@ -65,6 +73,7 @@ export const purchaseBillItemFormSchema = z.object({
   rate: rateField,
   discount_percent: percentField,
   tax_rate: percentField,
+  purchase_order_item_id: z.string().trim(),
 });
 
 export type PurchaseBillItemFormValues = z.infer<typeof purchaseBillItemFormSchema>;
@@ -76,6 +85,7 @@ export const DEFAULT_PURCHASE_BILL_ITEM_FORM_VALUES: PurchaseBillItemFormValues 
   rate: "",
   discount_percent: "",
   tax_rate: "",
+  purchase_order_item_id: "",
 };
 
 /** Populates the form from a fetched `PurchaseBillItem` for the Edit dialog - null fields become empty strings. */
@@ -87,6 +97,7 @@ export function toPurchaseBillItemFormValues(item: PurchaseBillItem): PurchaseBi
     rate: item.rate,
     discount_percent: item.discountPercent,
     tax_rate: item.taxRate,
+    purchase_order_item_id: item.purchaseOrderItemId ?? "",
   };
 }
 
@@ -101,6 +112,7 @@ export function toPurchaseBillItemRequestPayload(
     rate: values.rate,
     discount_percent: values.discount_percent || undefined,
     tax_rate: values.tax_rate || undefined,
+    purchase_order_item_id: values.purchase_order_item_id || undefined,
   };
 }
 

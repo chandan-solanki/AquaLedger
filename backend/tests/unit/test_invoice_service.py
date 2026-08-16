@@ -90,6 +90,16 @@ class _FakeCompanyService:
         assert self.company is not None
         return self.company
 
+    async def get_for_update(
+        self, company_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> _CompanyStub | None:
+        # Stands in for the Sprint 13 Session 3 concurrency fix's row lock -
+        # recalculate_payment_totals calls this before summing, but never
+        # reads its return value (see CompanyService.get_for_update's
+        # docstring), so this fake just records the call.
+        self.get_calls.append((company_id, tenant_id))
+        return self.company
+
     async def find_ids_by_name(self, tenant_id: uuid.UUID, q: str) -> list[uuid.UUID]:
         self.find_ids_calls.append((tenant_id, q))
         return self.find_ids_result

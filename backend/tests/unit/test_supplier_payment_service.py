@@ -170,7 +170,10 @@ def _service_with_fakes(
 class _FakePurchaseService:
     """Stands in for PurchaseService - SupplierPaymentService must call
     this, never PurchaseRepository directly (ARCHITECTURE.md §2, TASKS.md
-    Sprint 12 Session 3)."""
+    Sprint 12 Session 3). Sprint 13 Session 2's concurrency fix switched
+    _ensure_purchase_bill_allocatable from the unlocked get() to the
+    row-locking get_for_update() - this fake only needs to expose whichever
+    one is actually called, not both."""
 
     def __init__(
         self,
@@ -183,7 +186,7 @@ class _FakePurchaseService:
         self.get_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
         self.recalculate_payment_totals_calls: list[tuple[uuid.UUID, uuid.UUID, Decimal]] = []
 
-    async def get(
+    async def get_for_update(
         self, purchase_bill_id: uuid.UUID, *, tenant_id: uuid.UUID
     ) -> PurchaseBillResponse:
         self.get_calls.append((purchase_bill_id, tenant_id))
@@ -204,6 +207,7 @@ def _make_purchase_bill_response(**overrides: Any) -> PurchaseBillResponse:
         "id": uuid.uuid4(),
         "tenant_id": uuid.uuid4(),
         "supplier_id": uuid.uuid4(),
+        "purchase_order_id": None,
         "bill_number": "PUR/2026-27/00001",
         "bill_date": date(2026, 7, 23),
         "due_date": None,

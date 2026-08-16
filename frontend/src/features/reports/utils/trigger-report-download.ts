@@ -1,11 +1,6 @@
+import { downloadUrl } from "@/utils/download-url";
+
 /**
- * Triggers a real browser download via a BFF export proxy (TASKS.md
- * Sprint 11 Session 5 Phases B/C). A plain anchor click, not fetch+blob -
- * the browser handles the backend's `Content-Disposition: attachment`
- * header natively, and the BFF route is same-origin so the session's
- * httpOnly cookies ride along automatically, exactly like every other
- * authenticated navigation.
- *
  * `params` is the same snake_case wire object the caller already builds
  * for its own data query (e.g. `toFishSalesParams(filters)`) - reused as
  * -is rather than re-derived, so there is only one place per report/
@@ -18,15 +13,6 @@ function buildDownloadUrl(path: string, query: Record<string, string>, params: o
     searchParams.set(key, String(value));
   }
   return `${path}?${searchParams.toString()}`;
-}
-
-function downloadUrl(url: string): void {
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.rel = "noopener";
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
 }
 
 /**

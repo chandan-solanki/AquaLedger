@@ -1,13 +1,20 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
+# Registers PurchaseBillDocumentRenderer for DocumentType.PURCHASE_BILL into the shared
+# DocumentRegistry singleton, mirroring app.modules.invoices.router's own registration import.
+import app.modules.purchase.document_renderer as _purchase_document_renderer  # noqa: F401
 from app.common.schemas import ErrorResponse, PaginatedResponse
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.auth.permissions import require_permission
+from app.modules.documents.constants import PartyType, SourceType
+from app.modules.documents.dependencies import get_document_record_service
+from app.modules.documents.service import DocumentRecordService
 from app.modules.purchase.dependencies import get_purchase_service
+from app.modules.purchase.document_builder import build_purchase_bill_document_data
 from app.modules.purchase.permissions import (
     PURCHASE_CREATE,
     PURCHASE_DELETE,
@@ -418,6 +425,79 @@ async def get_purchase_bill(
     service: PurchaseService = Depends(get_purchase_service),
 ) -> PurchaseBillResponse:
     return await service.get(purchase_bill_id, tenant_id=current_user.tenant_id)
+
+
+_DOCUMENT_NOT_AVAILABLE_RESPONSE: dict[int | str, dict[str, object]] = {
+    422: {
+        "model": ErrorResponse,
+        "description": "The purchase bill has not been posted yet - it has no bill_number to print",
+        "content": {
+            "application/json": {
+                "example": _error_example(
+                    "PURCHASE_BILL_DOCUMENT_NOT_AVAILABLE",
+                    "The purchase bill must be posted before its document can be generated",
+                )
+            }
+        },
+    },
+}
+
+
+@router.get(
+    "/{purchase_bill_id}/document",
+    summary="Download the purchase bill as a PDF document",
+    description=(
+        "Renders a professional A4 PDF of this purchase bill via the shared Document "
+        "Engine (app.core.document_engine, Sprint 12 Session 1) and its ReportLab-based "
+        "PurchaseBillDocumentRenderer (Session 3, "
+        "app.modules.purchase.document_renderer) - no financial figure is recalculated "
+        "here, every value printed comes straight from this bill's own already-computed "
+        "totals and line items (app.modules.purchase.document_builder."
+        "build_purchase_bill_document_data). Only a posted bill (or beyond - "
+        "partially_paid/paid) can be downloaded: a still-draft bill has no bill_number "
+        "yet and returns 422 PURCHASE_BILL_DOCUMENT_NOT_AVAILABLE."
+    ),
+    responses={
+        **_COMMON_ERROR_RESPONSES,
+        **_NOT_FOUND_RESPONSE,
+        **_DOCUMENT_NOT_AVAILABLE_RESPONSE,
+        200: {
+            "description": "The rendered PDF",
+            "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}},
+        },
+    },
+    dependencies=[Depends(require_permission(PURCHASE_VIEW))],
+)
+async def get_purchase_bill_document(
+    purchase_bill_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: PurchaseService = Depends(get_purchase_service),
+    document_record_service: DocumentRecordService = Depends(get_document_record_service),
+) -> Response:
+    context = await service.get_document_context(purchase_bill_id, tenant_id=current_user.tenant_id)
+    document_data = build_purchase_bill_document_data(
+        context.purchase_bill,
+        context.items,
+        context.supplier,
+        tenant_name=context.tenant_name,
+        generated_by=current_user.full_name,
+    )
+
+    generated = await document_record_service.generate_store_and_record(
+        document_data,
+        tenant_id=current_user.tenant_id,
+        party_type=PartyType.SUPPLIER,
+        party_id=context.supplier.id,
+        party_name=context.supplier.name,
+        generated_by=current_user.id,
+        source_type=SourceType.PURCHASE_BILL,
+        source_id=purchase_bill_id,
+    )
+    return Response(
+        content=generated.content,
+        media_type=generated.content_type,
+        headers={"Content-Disposition": f'attachment; filename="{generated.file_name}"'},
+    )
 
 
 @router.put(

@@ -32,6 +32,28 @@ class SupplierRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_id_for_update(
+        self, supplier_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> Supplier | None:
+        """Same lookup as get_by_id, but takes a row-level lock (`SELECT ...
+        FOR UPDATE`) - the Sprint 13 Session 3 outstanding-recompute race fix,
+        mirroring CompanyRepository.get_by_id_for_update exactly. Used by
+        SupplierService.get_for_update so two concurrent recomputes of this
+        same supplier's outstanding_amount (each triggered by a different
+        purchase bill's allocation) serialize instead of both computing
+        their own SUM from a stale snapshot and blindly overwriting each
+        other via set_outstanding_amount."""
+        result = await self._session.execute(
+            select(Supplier)
+            .where(
+                Supplier.id == supplier_id,
+                Supplier.tenant_id == tenant_id,
+                Supplier.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def search(
         self,
         tenant_id: uuid.UUID,

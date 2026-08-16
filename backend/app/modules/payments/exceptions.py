@@ -94,6 +94,17 @@ class PaymentTotalsInvalidError(BusinessRuleError):
     code = "PAYMENT_TOTALS_INVALID"
 
 
+class PaymentDocumentNotAvailableError(BusinessRuleError):
+    """Raised when GET /payments/{id}/document (Sprint 12 Session 4) is
+    requested for a payment with no payment_number yet - a formal
+    receipt can't carry a number that doesn't exist (numbers are
+    assigned only at posting, never at draft creation), so a still-DRAFT
+    payment has nothing to print. Mirrors InvoiceDocumentNotAvailableError/
+    PurchaseBillDocumentNotAvailableError."""
+
+    code = "PAYMENT_DOCUMENT_NOT_AVAILABLE"
+
+
 class PaymentNumberConflictError(ConflictError):
     """Defensive backstop for the `ix_payments_tenant_payment_number`
     unique index firing on commit - should be unreachable given

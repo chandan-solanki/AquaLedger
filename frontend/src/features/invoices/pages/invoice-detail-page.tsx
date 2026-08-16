@@ -11,6 +11,7 @@ import { DeleteConfirmationDialog } from "@/components/feedback/dialogs/delete-c
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { ContentSection } from "@/components/layout/content-section";
+import { ExportMenu } from "@/components/reports";
 import { DetailPageTemplate } from "@/components/templates/detail-page-template";
 import { Badge } from "@/components/ui/badge";
 import type { PageAction } from "@/components/layout/page-actions";
@@ -21,6 +22,7 @@ import { useCompanyOptions } from "@/features/invoices/hooks/use-company-options
 import { useDeleteInvoice } from "@/features/invoices/hooks/use-delete-invoice";
 import { useInvoice } from "@/features/invoices/hooks/use-invoice";
 import { useIssueInvoice } from "@/features/invoices/hooks/use-issue-invoice";
+import { triggerInvoiceDocumentDownload } from "@/features/invoices/utils/trigger-invoice-document-download";
 import { normalizeApiError } from "@/utils/api-error";
 import { formatCurrency } from "@/utils/format-currency";
 import { formatDate, formatDateTime } from "@/utils/format-date";
@@ -108,6 +110,22 @@ export function InvoiceDetailPage() {
           : undefined
       }
       secondaryActions={secondaryActions.length > 0 ? secondaryActions : undefined}
+      exportMenu={
+        // Only an issued invoice (or beyond) has an invoice_number to print -
+        // a draft has nothing to download yet (backend: 422
+        // INVOICE_DOCUMENT_NOT_AVAILABLE), so the button mirrors that same
+        // backend-enforced rule the way Edit/Delete mirror DRAFT-only.
+        invoice && !isDraft && hasPermission("invoice:view") ? (
+          <ExportMenu
+            label="Download Invoice"
+            formats={["pdf"]}
+            onExport={(format) => {
+              if (format !== "pdf") return;
+              triggerInvoiceDocumentDownload(invoice.id);
+            }}
+          />
+        ) : undefined
+      }
       isLoading={invoiceQuery.isLoading}
       error={
         apiError

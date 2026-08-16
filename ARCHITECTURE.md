@@ -929,13 +929,20 @@ BEGIN
             UPDATE invoices.paid_amount += amount
             status = (paid_amount >= total) ? 'paid' : 'partially_paid'
   UPDATE payments.allocated_amount
+  lock company FOR UPDATE               ← acquired last, after every invoice
+                                           lock above - never reversed, so
+                                           this can't deadlock against them
+  UPDATE companies.outstanding_amount = Σ(open invoice balances)  ← recomputed
+                                          from source, not decremented (§14.2
+                                          note below)
   INSERT ledger_entries (credit)
-  UPDATE companies.outstanding_amount -= Σ
   INSERT outbox_events(PaymentReceived)
 COMMIT
 ```
 
 **Locking invoices in a deterministic order (by id) is essential.** Two clerks allocating overlapping payments in opposite order will otherwise deadlock in production, intermittently, and it will be blamed on "the server being slow".
+
+**Locking the company only after every invoice lock is equally essential (Sprint 13 Session 3).** `companies.outstanding_amount` (and, by the identical pattern, `suppliers.outstanding_amount` on the payable side) is a cache recomputed by summing open document balances, then overwritten with a plain `SET` - never an atomic `+=`. Without a lock on the party row taken *before* that sum, two concurrent allocations against different invoices of the same company can each sum a stale snapshot before either commits, and whichever's `SET` commits last silently discards the other's contribution. The company lock is always the *last* lock acquired in this chain (after payment, after every invoice) and is never acquired anywhere else first, so it cannot introduce a reverse-order deadlock against the invoice-locking rule above. The mirrored supplier-payment flow (`SupplierPayment → PurchaseBill → Supplier`) follows the same order for the same reason.
 
 ### 14.3 Auto-Allocation
 
@@ -1821,6 +1828,58 @@ Independent of PDF export: `frontend/styles/report-print.css` gives every page a
 | `[data-slot="tabs-list"]` (the switcher — the active tab's own content stays, since Radix only renders that one) | |
 
 `table { width/min-width }` is reset (overriding `DataTable`'s inline sizing) so a wide table never clips against the on-screen horizontal-scroll container; `thead { display: table-header-group }` repeats column headers on every printed page, the same technique the PDF template (§41.2) already uses. `@page { size: A4 }` by default; `ReportPageTemplate`'s `wide` prop (set on Trip/Boat Profitability and Fish Sales Analytics — the same 9+-column reports the PDF exporter's own `_LANDSCAPE_COLUMN_THRESHOLD` already switches to landscape) applies a `.report-print-landscape` class that assigns a `landscape`-sized `@page` to that printout, so the browser printout and the downloaded PDF agree on orientation.
+
+---
+
+## 42. Purchase Order ↔ Purchase Bill Relationship
+
+*As-built (Sprint 12), documented here because the Purchase/Purchase Order/Supplier modules post-date this document's original blueprint. This section covers only the relationship between the two; it is not a full write-up of either module.*
+
+A Purchase Order and a Purchase Bill are two independent lifecycles, linked optionally:
+
+```
+Purchase Order (procurement commitment)      Purchase Bill (financial liability)
+  draft → confirmed → fulfilled                draft → posted → partially_paid → paid
+       └──────────────── cancelled                  └──────────────── cancelled
+```
+
+- **The link is optional at both the header and the line-item level.** `purchase_bills.purchase_order_id` and `purchase_bill_items.purchase_order_item_id` are both nullable — a standalone Purchase Bill with no Purchase Order (the original, pre-Sprint-12 flow) remains fully supported and untouched.
+- **Set once, at creation, never changed.** `purchase_order_id` has no corresponding field on the bill's update request — once a bill exists, it can never be re-linked or unlinked.
+- **Multiple bills per order, partial billing.** A Purchase Order can be billed across any number of Purchase Bills, each covering part of an item's ordered quantity. There is no "one bill per order" constraint anywhere in the schema.
+- **Billing status is derived, never stored.** `not_billed` / `partially_billed` / `fully_billed` is recomputed on every read from live `PurchaseBillItem` quantities (`app.modules.purchase_orders.domain.billing.derive_billing_summary`) — there is no billing-status column to drift out of sync. The underlying comparison is always quantity-based, never money-based (money can legitimately differ between order and bill if a rate moves).
+- **Over-billing is impossible.** Before any bill item is added or updated against a Purchase Order item, the sum of every other valid (non-deleted, non-cancelled-bill) bill item already referencing it — including other still-DRAFT bills' reservations — is checked against that item's ordered quantity. Exceeding it raises `PURCHASE_BILL_OVER_BILLING` at entry time, not at posting time.
+- **Only a CONFIRMED or FULFILLED order can be linked**, and only to a bill for the same supplier — a DRAFT order has no commitment yet, a CANCELLED one never should, and a supplier mismatch is always rejected (`PURCHASE_BILL_PURCHASE_ORDER_NOT_BILLABLE` / `PURCHASE_BILL_SUPPLIER_MISMATCH`).
+- **A Purchase Order never affects `suppliers.outstanding_amount`, at any lifecycle stage** — creating, confirming, cancelling, or fulfilling one is purely a procurement-side event. **Only `PurchaseService.post()` increases it**, exactly once, at the moment a linked or standalone bill is posted; subsequent supplier payment allocations then recompute it from source, the same as for any other purchase bill.
+- **Billing never drives fulfillment.** A fully-billed order does not automatically transition to `fulfilled` — that remains an explicit, separate action. A CONFIRMED order can be `fully_billed` and stay CONFIRMED indefinitely.
+
+---
+
+## 43. Delivery Challan Domain
+
+*As-built (Sprint 12, through Session 16). The backend domain landed in Session 14; PDF generation, Document Center registration, and the frontend module landed in Session 16 — see the updated deferred-work note at the end of this section.*
+
+A Delivery Challan records the physical dispatch/delivery of goods already invoiced to a customer:
+
+```
+Customer
+   ↓
+Invoice (financial commitment — issue() creates the receivable)
+   ↓
+Delivery Challan(s) (logistics record — physical dispatch/delivery only)
+   ↓
+Physical delivery
+```
+
+- **The Invoice link is mandatory, not optional** — unlike Purchase Bill's optional `purchase_order_id` (which stayed optional only to preserve the pre-existing standalone-bill flow), a Delivery Challan has no such backward-compatibility constraint: `invoice_id` and each item's `invoice_item_id` are both `NOT NULL`. There is no `company_id` column on `delivery_challans` either — the customer is always read via the linked invoice, never duplicated, so it can never drift from the invoice's own `company_id`.
+- **No financial fields anywhere in this domain.** Neither the header nor its items carry rate/tax/discount/subtotal/total_amount — a delivery challan is logistics-only. Creating, dispatching, delivering, or cancelling one never touches `invoices.balance_amount`/`paid_amount`, `companies.outstanding_amount`, ledger, or any financial report. Only `Invoice.issue()` (before any challan exists) and Payment allocation ever move those figures.
+- **Lifecycle** mirrors `PurchaseOrderStatus`'s shape: `draft → dispatched → delivered` (terminal), with `cancelled` reachable from `draft` or `dispatched` — never from `delivered`. `challan_number` is assigned only at `dispatch()` (the transition where the document stops being an editable draft and becomes a real, physical event), the same numbering-at-transition discipline every other document type in this system follows.
+- **Numbering**: `DC/{fiscal_year}/{sequence}`, via its own `delivery_challan_sequences` table — the same per-tenant/prefix/fiscal-year locked-counter pattern as `invoice_sequences`/`purchase_order_sequences`/`purchase_sequences`.
+- **Over-delivery is impossible.** Before any challan item is added or updated, the sum of every other valid (non-deleted-challan, non-CANCELLED-challan) delivery challan item already referencing the same invoice item — including other still-DRAFT challans' reservations — is checked against that invoice item's own invoiced quantity. Exceeding it raises `DELIVERY_CHALLAN_OVER_DELIVERY` at entry time. Cancelling or deleting a draft item immediately frees its reserved quantity for other challans against the same invoice item.
+- **Only an ISSUED, PARTIALLY_PAID, or PAID invoice can be linked** — a DRAFT invoice has no real commitment to deliver against yet, and a CANCELLED one never should (`DELIVERY_CHALLAN_INVOICE_NOT_DELIVERABLE`).
+- **Multiple challans per invoice, partial delivery** — an invoice item can be delivered across any number of delivery challans; there is no "one challan per invoice" constraint.
+- **Tenant isolation** follows the same pattern as every other module: every repository query is tenant-scoped, and invoice/invoice-item validation goes through `InvoiceService`'s own already tenant-scoped `get()`/`list_items()` methods — no new methods were added to the `invoices` module for this, and no cross-module SQLAlchemy `relationship()` exists (`invoice_id`/`invoice_item_id` are bare FK columns, mirroring `PurchaseBill.purchase_order_id`).
+- **PDF generation, Document Center registration, and the frontend module all shipped in Session 16** (`app/modules/delivery_challans/document_builder.py`, `document_renderer.py` registering `DocumentType.DELIVERY_CHALLAN`, the `GET /delivery-challans/{id}/document` route gated on the challan being dispatched, and `frontend/src/features/delivery-challans/` end to end). The PDF deliberately carries no totals table — no `paid`/`balance`/`outstanding`, matching this section's "no financial fields" rule.
+- **Still deferred**: email delivery, signatures/QR codes, and any approval workflow. These belong to future sessions.
 
 ---
 

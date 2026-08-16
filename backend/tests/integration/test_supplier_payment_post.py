@@ -15,6 +15,7 @@ from app.modules.purchase.schemas import (
     PurchaseBillItemCreateRequest,
 )
 from app.modules.purchase.service import PurchaseService
+from app.modules.purchase_orders.service import PurchaseOrderService
 from app.modules.supplier_payments.constants import SupplierPaymentStatus
 from app.modules.supplier_payments.exceptions import (
     SupplierPaymentAllocationPaymentNotDraftError,
@@ -43,7 +44,7 @@ def supplier_payment_service(db_session: AsyncSession) -> SupplierPaymentService
 
 @pytest.fixture
 def purchase_service(db_session: AsyncSession) -> PurchaseService:
-    return PurchaseService(db_session)
+    return PurchaseService(db_session, purchase_order_service=PurchaseOrderService(db_session))
 
 
 @pytest.fixture

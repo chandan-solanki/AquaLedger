@@ -33,6 +33,7 @@ class _FakePurchaseBillRow:
     id: uuid.UUID
     tenant_id: uuid.UUID
     supplier_id: uuid.UUID
+    purchase_order_id: uuid.UUID | None
     bill_number: str | None
     bill_date: date
     due_date: date | None
@@ -58,6 +59,7 @@ class _FakePurchaseBillItemRow:
     id: uuid.UUID
     tenant_id: uuid.UUID
     purchase_bill_id: uuid.UUID
+    purchase_order_item_id: uuid.UUID | None
     line_number: int
     description: str | None
     quantity: Decimal
@@ -79,6 +81,7 @@ def _make_bill_row(**overrides: object) -> _FakePurchaseBillRow:
         "id": uuid.uuid4(),
         "tenant_id": uuid.uuid4(),
         "supplier_id": uuid.uuid4(),
+        "purchase_order_id": None,
         "bill_number": None,
         "bill_date": date(2026, 7, 23),
         "due_date": None,
@@ -108,6 +111,7 @@ def _make_item_row(**overrides: object) -> _FakePurchaseBillItemRow:
         "id": uuid.uuid4(),
         "tenant_id": uuid.uuid4(),
         "purchase_bill_id": uuid.uuid4(),
+        "purchase_order_item_id": None,
         "line_number": 1,
         "description": None,
         "quantity": Decimal("1.000"),

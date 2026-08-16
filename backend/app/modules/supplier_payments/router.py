@@ -1,13 +1,23 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
+# Registers SupplierPaymentReceiptRenderer for DocumentType.SUPPLIER_PAYMENT_RECEIPT into the
+# shared DocumentRegistry singleton, mirroring app.modules.invoices.router's own registration
+# import.
+import app.modules.supplier_payments.document_renderer as _supplier_payment_document_renderer  # noqa: F401
 from app.common.schemas import ErrorResponse, PaginatedResponse
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.auth.permissions import require_permission
+from app.modules.documents.constants import PartyType, SourceType
+from app.modules.documents.dependencies import get_document_record_service
+from app.modules.documents.service import DocumentRecordService
 from app.modules.supplier_payments.dependencies import get_supplier_payment_service
+from app.modules.supplier_payments.document_builder import (
+    build_supplier_payment_receipt_document_data,
+)
 from app.modules.supplier_payments.permissions import (
     SUPPLIER_PAYMENT_CREATE,
     SUPPLIER_PAYMENT_DELETE,
@@ -418,6 +428,84 @@ async def get_supplier_payment(
     service: SupplierPaymentService = Depends(get_supplier_payment_service),
 ) -> SupplierPaymentResponse:
     return await service.get(supplier_payment_id, tenant_id=current_user.tenant_id)
+
+
+_DOCUMENT_NOT_AVAILABLE_RESPONSE: dict[int | str, dict[str, object]] = {
+    422: {
+        "model": ErrorResponse,
+        "description": (
+            "The supplier payment has not been posted yet - it has no payment_number to print"
+        ),
+        "content": {
+            "application/json": {
+                "example": _error_example(
+                    "SUPPLIER_PAYMENT_DOCUMENT_NOT_AVAILABLE",
+                    "The supplier payment must be posted before its document can be generated",
+                )
+            }
+        },
+    },
+}
+
+
+@router.get(
+    "/{supplier_payment_id}/document",
+    summary="Download the supplier payment as a supplier payment receipt PDF",
+    description=(
+        "Renders a professional A4 payment receipt via the shared Document Engine "
+        "(app.core.document_engine, Sprint 12 Session 1) and its ReportLab-based "
+        "SupplierPaymentReceiptRenderer (Session 4, "
+        "app.modules.supplier_payments.document_renderer) - no financial figure is "
+        "recalculated here, every value printed comes straight from this payment's own "
+        "already-computed amount and allocations "
+        "(app.modules.supplier_payments.document_builder."
+        "build_supplier_payment_receipt_document_data). Only a posted payment (or "
+        "beyond) can be downloaded: a still-draft payment has no payment_number yet "
+        "and returns 422 SUPPLIER_PAYMENT_DOCUMENT_NOT_AVAILABLE."
+    ),
+    responses={
+        **_COMMON_ERROR_RESPONSES,
+        **_NOT_FOUND_RESPONSE,
+        **_DOCUMENT_NOT_AVAILABLE_RESPONSE,
+        200: {
+            "description": "The rendered PDF",
+            "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}},
+        },
+    },
+    dependencies=[Depends(require_permission(SUPPLIER_PAYMENT_VIEW))],
+)
+async def get_supplier_payment_document(
+    supplier_payment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: SupplierPaymentService = Depends(get_supplier_payment_service),
+    document_record_service: DocumentRecordService = Depends(get_document_record_service),
+) -> Response:
+    context = await service.get_document_context(
+        supplier_payment_id, tenant_id=current_user.tenant_id
+    )
+    document_data = build_supplier_payment_receipt_document_data(
+        context.supplier_payment,
+        context.supplier,
+        context.allocations,
+        tenant_name=context.tenant_name,
+        generated_by=current_user.full_name,
+    )
+
+    generated = await document_record_service.generate_store_and_record(
+        document_data,
+        tenant_id=current_user.tenant_id,
+        party_type=PartyType.SUPPLIER,
+        party_id=context.supplier.id,
+        party_name=context.supplier.name,
+        generated_by=current_user.id,
+        source_type=SourceType.SUPPLIER_PAYMENT,
+        source_id=supplier_payment_id,
+    )
+    return Response(
+        content=generated.content,
+        media_type=generated.content_type,
+        headers={"Content-Disposition": f'attachment; filename="{generated.file_name}"'},
+    )
 
 
 @router.put(

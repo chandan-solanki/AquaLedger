@@ -2,12 +2,15 @@ import math
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import NamedTuple
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
+from app.modules.auth.models import Tenant
 from app.modules.purchase.constants import PURCHASE_NUMBER_PREFIX, PurchaseStatus
 from app.modules.purchase.domain.numbering import fiscal_year_for, format_purchase_number
 from app.modules.purchase.domain.totals import (
@@ -17,12 +20,19 @@ from app.modules.purchase.domain.totals import (
     calculate_purchase_bill_totals,
 )
 from app.modules.purchase.exceptions import (
+    PurchaseBillDocumentNotAvailableError,
     PurchaseBillEmptyError,
     PurchaseBillItemNotFoundError,
     PurchaseBillNotDraftError,
     PurchaseBillNotFoundError,
+    PurchaseBillNotLinkedToPurchaseOrderError,
+    PurchaseBillOverBillingError,
+    PurchaseBillPurchaseOrderItemNotFoundError,
+    PurchaseBillPurchaseOrderNotBillableError,
+    PurchaseBillPurchaseOrderNotFoundError,
     PurchaseBillReconciliationError,
     PurchaseBillSupplierInactiveError,
+    PurchaseBillSupplierMismatchError,
     PurchaseBillSupplierNotFoundError,
     PurchaseCalculationError,
     PurchaseNumberConflictError,
@@ -39,6 +49,13 @@ from app.modules.purchase.schemas import (
     PurchaseBillResponse,
     PurchaseBillUpdateRequest,
 )
+from app.modules.purchase_orders.constants import PurchaseOrderStatus
+from app.modules.purchase_orders.domain.billing import ItemBillingInfo, PurchaseOrderLinkedBill
+from app.modules.purchase_orders.exceptions import (
+    PurchaseOrderItemNotFoundError,
+    PurchaseOrderNotFoundError,
+)
+from app.modules.purchase_orders.service import PurchaseOrderService
 from app.modules.supplier_payments.domain.reconciliation import (
     ReconciliationError,
     calculate_purchase_bill_payment,
@@ -47,6 +64,21 @@ from app.modules.suppliers.constants import SupplierStatus
 from app.modules.suppliers.exceptions import SupplierNotFoundError
 from app.modules.suppliers.schemas import SupplierResponse
 from app.modules.suppliers.service import SupplierService
+
+
+class PurchaseBillDocumentContext(NamedTuple):
+    """Everything PurchaseBillDocumentBuilder.build_purchase_bill_document_data()
+    (Sprint 12 Session 3) needs, assembled by
+    PurchaseService.get_document_context() - a labeled return type
+    instead of a positional tuple, mirroring InvoiceDocumentContext.
+    No fish map (unlike InvoiceDocumentContext): PurchaseBillItem has no
+    fish_id - a purchase line is plain description/quantity/unit/rate,
+    not linked to a fish master."""
+
+    purchase_bill: PurchaseBillResponse
+    items: list[PurchaseBillItemResponse]
+    supplier: SupplierResponse
+    tenant_name: str
 
 
 class PurchaseService:
@@ -79,15 +111,26 @@ class PurchaseService:
     the immutability half of that same rule.
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, purchase_order_service: PurchaseOrderService) -> None:
         self._session = session
         self._repo = PurchaseRepository(session)
         self._supplier_service = SupplierService(session)
+        # Sprint 12 Session 12: the one dependency that lets a purchase
+        # bill validate/resolve its optional purchase order linkage.
+        # PurchaseOrderService itself has no dependency back on this
+        # module - purchase_orders is the upstream, foundational domain,
+        # purchase (bill) is the downstream consumer, so this is a
+        # one-directional edge, never a cycle.
+        self._purchase_order_service = purchase_order_service
 
     async def create(
         self, payload: PurchaseBillCreateRequest, *, tenant_id: uuid.UUID, actor_id: uuid.UUID
     ) -> PurchaseBillResponse:
         await self._ensure_supplier_active(payload.supplier_id, tenant_id)
+        if payload.purchase_order_id is not None:
+            await self._validate_purchase_order_link(
+                payload.purchase_order_id, payload.supplier_id, tenant_id=tenant_id
+            )
 
         # bill_number/posted_at stay NULL and every financial field stays 0 -
         # none is client-supplied (see PurchaseBillCreateRequest); numbers
@@ -95,6 +138,7 @@ class PurchaseService:
         purchase_bill = PurchaseBill(
             tenant_id=tenant_id,
             supplier_id=payload.supplier_id,
+            purchase_order_id=payload.purchase_order_id,
             bill_number=None,
             bill_date=payload.bill_date,
             due_date=payload.due_date,
@@ -124,6 +168,74 @@ class PurchaseService:
     ) -> PurchaseBillResponse:
         purchase_bill = await self._get_or_raise(purchase_bill_id, tenant_id)
         return self._to_response(purchase_bill)
+
+    async def get_for_update(
+        self, purchase_bill_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> PurchaseBillResponse:
+        """Row-locking counterpart of get() for the supplier-payment
+        allocation engine (ARCHITECTURE.md §14.2, mirrored for the payable
+        side: "lock each target invoice/bill FOR UPDATE"). Takes `SELECT
+        ... FOR UPDATE` via PurchaseRepository.get_by_id_for_update so a
+        concurrent allocation against this same bill can't validate its own
+        ceilings against a stale balance_amount while this one is in
+        flight - the lock is held until the caller's transaction commits or
+        rolls back. Callers (SupplierPaymentService) share this
+        AsyncSession, so the lock applies to their outer transaction, not a
+        separate one. Mirrors InvoiceService.get_for_update exactly."""
+        purchase_bill = await self._repo.get_by_id_for_update(purchase_bill_id, tenant_id)
+        if purchase_bill is None:
+            raise PurchaseBillNotFoundError("Purchase bill not found")
+        return self._to_response(purchase_bill)
+
+    async def get_document_context(
+        self, purchase_bill_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> PurchaseBillDocumentContext:
+        """Assembles everything PurchaseBillDocumentBuilder (Sprint 12
+        Session 3) needs to build a DocumentData for the purchase bill
+        PDF - the bill itself, its items, the billing supplier's
+        profile, and the tenant's display name - entirely via existing
+        service methods and a plain tenant-name lookup (mirrors
+        InvoiceService.get_document_context exactly, minus a fish map:
+        PurchaseBillItem has no fish_id). No new repository query, no
+        new calculation - this is data retrieval only, never a
+        transform; the builder does the DTO -> DocumentData mapping.
+
+        Raises PurchaseBillDocumentNotAvailableError if the bill has no
+        bill_number yet (still DRAFT) - a formal document can't carry a
+        number that doesn't exist (numbers are assigned only at
+        posting).
+        """
+        purchase_bill = await self._get_or_raise(purchase_bill_id, tenant_id)
+        if purchase_bill.bill_number is None:
+            raise PurchaseBillDocumentNotAvailableError(
+                "The purchase bill must be posted before its document can be generated"
+            )
+
+        items = await self._repo.search_items(
+            purchase_bill.id, tenant_id, q=None, sort="line_number"
+        )
+
+        try:
+            supplier = await self._supplier_service.get(
+                purchase_bill.supplier_id, tenant_id=tenant_id
+            )
+        except SupplierNotFoundError as exc:
+            raise PurchaseBillSupplierNotFoundError(
+                "The specified supplier does not exist"
+            ) from exc
+
+        tenant_name = await self._get_tenant_name(tenant_id)
+
+        return PurchaseBillDocumentContext(
+            purchase_bill=self._to_response(purchase_bill),
+            items=[self._to_item_response(item) for item in items],
+            supplier=supplier,
+            tenant_name=tenant_name,
+        )
+
+    async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:
+        result = await self._session.execute(select(Tenant.name).where(Tenant.id == tenant_id))
+        return result.scalar_one()
 
     async def list_purchase_bills(
         self, *, tenant_id: uuid.UUID, params: PurchaseBillListParams
@@ -175,6 +287,16 @@ class PurchaseService:
         new_supplier_id = update_data.get("supplier_id", purchase_bill.supplier_id)
         if "supplier_id" in update_data and new_supplier_id != purchase_bill.supplier_id:
             await self._ensure_supplier_active(new_supplier_id, tenant_id)
+            # purchase_order_id itself is immutable after creation (no
+            # field for it on PurchaseBillUpdateRequest), but the
+            # supplier CAN still change - re-validate the still-linked
+            # purchase order still matches the new supplier, otherwise
+            # this update would silently invalidate the match that was
+            # enforced at creation time.
+            if purchase_bill.purchase_order_id is not None:
+                await self._validate_purchase_order_link(
+                    purchase_bill.purchase_order_id, new_supplier_id, tenant_id=tenant_id
+                )
 
         for field, value in update_data.items():
             setattr(purchase_bill, field, value)
@@ -201,6 +323,14 @@ class PurchaseService:
     ) -> PurchaseBillItemResponse:
         purchase_bill = await self._get_or_raise(purchase_bill_id, tenant_id)
         self._ensure_draft(purchase_bill)
+        if payload.purchase_order_item_id is not None:
+            await self._validate_po_item_link(
+                purchase_bill,
+                payload.purchase_order_item_id,
+                payload.quantity,
+                tenant_id,
+                exclude_item_id=None,
+            )
         line_number = await self._repo.allocate_next_line_number(purchase_bill_id, tenant_id)
 
         # Financial columns start at zero - none is client-supplied (see
@@ -212,6 +342,7 @@ class PurchaseService:
         item = PurchaseBillItem(
             tenant_id=tenant_id,
             purchase_bill_id=purchase_bill_id,
+            purchase_order_item_id=payload.purchase_order_item_id,
             line_number=line_number,
             description=payload.description,
             quantity=payload.quantity,
@@ -257,6 +388,24 @@ class PurchaseService:
         self._ensure_draft(purchase_bill)
         item = await self._get_item_or_raise(purchase_bill_id, item_id, tenant_id)
         update_data = payload.model_dump(exclude_unset=True)
+
+        # Validate against the item's EFFECTIVE (merged) purchase order
+        # item link and quantity - whichever of the two the caller didn't
+        # touch keeps its current value - excluding this item's own id from
+        # the "already billed" sum so its prior contribution isn't double
+        # counted against its own proposed new quantity.
+        effective_po_item_id = update_data.get(
+            "purchase_order_item_id", item.purchase_order_item_id
+        )
+        effective_quantity = update_data.get("quantity", item.quantity)
+        if effective_po_item_id is not None:
+            await self._validate_po_item_link(
+                purchase_bill,
+                effective_po_item_id,
+                effective_quantity,
+                tenant_id,
+                exclude_item_id=item.id,
+            )
 
         for field, value in update_data.items():
             setattr(item, field, value)
@@ -378,7 +527,11 @@ class PurchaseService:
         SupplierPaymentRepository; PurchaseService never touches the
         supplier_payments module's tables, ARCHITECTURE.md §2). Called after
         every allocation create/update/delete that touches this purchase
-        bill (mirrors InvoiceService.recalculate_payment_totals exactly).
+        bill (mirrors InvoiceService.recalculate_payment_totals exactly,
+        including its Sprint 13 Session 3 concurrency fix: the supplier is
+        locked FOR UPDATE via SupplierService.get_for_update *before* the
+        SUM below, not after - see that method's docstring for the full
+        rationale and the lock-order argument for why this can't deadlock).
         """
         purchase_bill = await self._get_or_raise(purchase_bill_id, tenant_id)
         try:
@@ -395,6 +548,7 @@ class PurchaseService:
         purchase_bill.status = totals.status
         await self._session.flush()
 
+        await self._supplier_service.get_for_update(purchase_bill.supplier_id, tenant_id=tenant_id)
         total_open_balance = await self._repo.sum_open_balance_by_supplier(
             purchase_bill.supplier_id, tenant_id
         )
@@ -487,6 +641,150 @@ class PurchaseService:
         purchase_bill.total_amount = bill_totals.total_amount
         purchase_bill.paid_amount = bill_totals.paid_amount
         purchase_bill.balance_amount = bill_totals.balance_amount
+
+    async def get_billed_quantities_for_po_items(
+        self, purchase_order_item_ids: list[uuid.UUID], *, tenant_id: uuid.UUID
+    ) -> dict[uuid.UUID, ItemBillingInfo]:
+        """Public entry point for app.modules.purchase_orders.router to
+        compose a purchase order's billing summary (Sprint 12 Session 12) -
+        the one place PurchaseBillItem data is read from outside this
+        module. Kept here, rather than exposing PurchaseRepository
+        directly, so purchase_orders never bypasses this module's own
+        service to reach its repository (ARCHITECTURE.md §2/§3.2) - the
+        same rule this module itself follows toward SupplierService."""
+        return await self._repo.sum_billed_by_po_items(purchase_order_item_ids, tenant_id)
+
+    async def list_bills_for_purchase_order(
+        self, purchase_order_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> list[PurchaseOrderLinkedBill]:
+        """Public entry point for app.modules.purchase_orders.router to list
+        the Purchase Bills linked to one purchase order (Sprint 12 Session
+        13) - the same "purchase_orders never bypasses this module's own
+        service to reach its repository" rule
+        get_billed_quantities_for_po_items already follows. The caller is
+        responsible for confirming the purchase order itself exists for this
+        tenant (404 otherwise) - this method only ever returns an empty list
+        for an unknown/foreign-tenant id, never raises."""
+        bills = await self._repo.list_by_purchase_order(purchase_order_id, tenant_id)
+        return [
+            PurchaseOrderLinkedBill(
+                id=bill.id,
+                bill_number=bill.bill_number,
+                bill_date=bill.bill_date,
+                status=str(bill.status),
+                total_amount=bill.total_amount,
+                balance_amount=bill.balance_amount,
+            )
+            for bill in bills
+        ]
+
+    async def _validate_purchase_order_link(
+        self, purchase_order_id: uuid.UUID, supplier_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> None:
+        """Enforces the header-level linkage rules (Sprint 12 Session 12):
+        the purchase order must exist for this tenant (PurchaseOrderService.
+        get() is already tenant-scoped, so a foreign-tenant order surfaces
+        as "not found" here too), must be CONFIRMED or FULFILLED (a DRAFT
+        order has no commitment to bill against yet; a CANCELLED one never
+        should), and must belong to the same supplier as the bill itself.
+        Read-only - never touches Supplier.outstanding_amount or any
+        PurchaseOrder field, mirroring _ensure_supplier_active's own
+        posture toward SupplierService."""
+        try:
+            purchase_order = await self._purchase_order_service.get(
+                purchase_order_id, tenant_id=tenant_id
+            )
+        except PurchaseOrderNotFoundError as exc:
+            raise PurchaseBillPurchaseOrderNotFoundError(
+                "The specified purchase order does not exist"
+            ) from exc
+        if purchase_order.status not in (
+            PurchaseOrderStatus.CONFIRMED,
+            PurchaseOrderStatus.FULFILLED,
+        ):
+            raise PurchaseBillPurchaseOrderNotBillableError(
+                "Only confirmed or fulfilled purchase orders can be linked to a purchase bill"
+            )
+        if purchase_order.supplier_id != supplier_id:
+            raise PurchaseBillSupplierMismatchError(
+                "The purchase order belongs to a different supplier"
+            )
+
+    async def _validate_po_item_link(
+        self,
+        purchase_bill: PurchaseBill,
+        purchase_order_item_id: uuid.UUID,
+        quantity: Decimal,
+        tenant_id: uuid.UUID,
+        *,
+        exclude_item_id: uuid.UUID | None,
+    ) -> None:
+        """The one hard-enforced constraint of the PO billing feature
+        (Sprint 12 Session 12): a bill item's quantity, added to every
+        other bill item already billed against the same purchase order
+        item, must never exceed that item's own ordered quantity.
+
+        Runs at add_item/update_item time - while the bill is still DRAFT,
+        never deferred to post() - and deliberately counts "already
+        billed" across every valid (non-deleted, non-cancelled-bill) bill
+        item referencing that purchase order item, including OTHER DRAFT
+        bills' items, not only POSTED ones
+        (PurchaseRepository.sum_billed_quantity_for_po_item). This is a
+        reservation: two concurrent drafts against the same purchase order
+        item are each rejected immediately, at entry time, the moment
+        their combined quantity would exceed what's ordered, rather than
+        racing until one of them reaches post() - and since this is a live
+        aggregate query, never a stored counter, deleting an abandoned
+        draft item immediately frees its reserved quantity back up.
+
+        The "concurrent drafts are rejected rather than racing" guarantee
+        above requires get_for_update's row lock on the purchase order,
+        not a plain read: without it, two simultaneous requests could each
+        read the "already billed" sum before either commits and jointly
+        exceed the item's ordered quantity (a classic TOCTOU gap). Locking
+        the parent order (not just the item) is deliberately coarse -
+        PurchaseOrderItem.quantity is immutable outside DRAFT (the only
+        billable statuses), so serializing at the order level is
+        sufficient and mirrors post()'s own lock-then-validate shape.
+        """
+        if purchase_bill.purchase_order_id is None:
+            raise PurchaseBillNotLinkedToPurchaseOrderError(
+                "This purchase bill has no linked purchase order to bill an item against"
+            )
+        # Re-checked here, not just once at header-link time: the linked
+        # purchase order could have been cancelled after this bill's
+        # purchase_order_id was set but before this particular item was
+        # added (purchase_order_id itself never changes, but the order's
+        # own status can, independently, at any time).
+        purchase_order = await self._purchase_order_service.get_for_update(
+            purchase_bill.purchase_order_id, tenant_id=tenant_id
+        )
+        if purchase_order.status not in (
+            PurchaseOrderStatus.CONFIRMED,
+            PurchaseOrderStatus.FULFILLED,
+        ):
+            raise PurchaseBillPurchaseOrderNotBillableError(
+                "Only confirmed or fulfilled purchase orders can be billed against"
+            )
+        try:
+            po_item = await self._purchase_order_service.get_item(
+                purchase_bill.purchase_order_id, purchase_order_item_id, tenant_id=tenant_id
+            )
+        except PurchaseOrderItemNotFoundError as exc:
+            raise PurchaseBillPurchaseOrderItemNotFoundError(
+                "The specified purchase order item does not belong to this bill's linked "
+                "purchase order"
+            ) from exc
+
+        already_billed = await self._repo.sum_billed_quantity_for_po_item(
+            purchase_order_item_id, tenant_id, exclude_item_id=exclude_item_id
+        )
+        if already_billed + quantity > po_item.quantity:
+            remaining = po_item.quantity - already_billed
+            raise PurchaseBillOverBillingError(
+                f"Billing quantity {quantity} exceeds the remaining {remaining} "
+                f"{po_item.unit} on this purchase order item"
+            )
 
     async def _ensure_supplier_active(
         self, supplier_id: uuid.UUID, tenant_id: uuid.UUID

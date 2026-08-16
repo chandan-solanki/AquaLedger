@@ -110,6 +110,16 @@ class InvoiceReconciliationError(BusinessRuleError):
     code = "INVOICE_RECONCILIATION_ERROR"
 
 
+class InvoiceDocumentNotAvailableError(BusinessRuleError):
+    """Raised when GET /invoices/{id}/document (Sprint 12 Session 2) is
+    requested for an invoice with no invoice_number yet - a formal
+    document can't carry a number that doesn't exist (ARCHITECTURE.md
+    §13.1: numbers are assigned only at issue, never at draft
+    creation), so a still-DRAFT invoice has nothing to print."""
+
+    code = "INVOICE_DOCUMENT_NOT_AVAILABLE"
+
+
 class InvoiceNumberConflictError(ConflictError):
     """Defensive backstop for the `ix_invoices_tenant_invoice_number` unique
     index firing on commit - should be unreachable given
