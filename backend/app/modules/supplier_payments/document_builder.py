@@ -59,6 +59,8 @@ def build_supplier_payment_receipt_document_data(
     allocations: list[SupplierPaymentAllocationDisplay],
     *,
     tenant_name: str,
+    tenant_details: str | None = None,
+    tenant_logo_bytes: bytes | None = None,
     generated_by: str,
 ) -> DocumentData:
     """Converts an already-fetched supplier payment + supplier +
@@ -119,6 +121,8 @@ def build_supplier_payment_receipt_document_data(
         document_date=supplier_payment.payment_date,
         title="Supplier Payment Receipt",
         tenant_name=tenant_name,
+        tenant_details=tenant_details,
+        tenant_logo_bytes=tenant_logo_bytes,
         party=party,
         sections=sections,
         totals=totals,

@@ -13,7 +13,11 @@
 
 <header class="report-header">
   <div class="brand">
+    {% if tenant_logo_data_uri %}
+    <img class="logo-image" src="{{ tenant_logo_data_uri }}" alt="">
+    {% else %}
     <div class="logo-placeholder">{{ tenant_initials }}</div>
+    {% endif %}
     <div class="tenant-name">{{ tenant_name }}</div>
   </div>
   <div class="report-title-block">

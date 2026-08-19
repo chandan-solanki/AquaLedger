@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.report_export.registry import registry as export_registry
 from app.modules.auth.constants import AccountStatus
-from app.modules.auth.models import User
+from app.modules.auth.models import Tenant, User
 from app.modules.auth.security import create_access_token, hash_password
 from app.modules.companies.models import Company
 from app.modules.fish.models import Fish
@@ -301,6 +301,93 @@ class TestExportPDFDownload:
         assert response.headers["content-type"] == "application/pdf"
         assert ".pdf" in response.headers["content-disposition"]
         assert response.content.startswith(b"%PDF")
+
+
+# A minimal real 2x2 PNG (generated via Pillow) - valid enough for
+# WeasyPrint to embed as an actual image XObject, not just pass through
+# as opaque base64 text.
+_PNG_LOGO_BYTES = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd4"
+    "9a730000001349444154789c6364f8cfc0c0c0c004221818000c1e0103acd8"
+    "8ba70000000049454e44ae426082"
+)
+
+
+class TestExportPDFCompanyProfileBranding:
+    """Sprint 14: a tenant's uploaded logo appears in an exported PDF's
+    header (report.html/report.css), replacing the initials placeholder -
+    and CSV/Excel exports remain completely unaffected by it.
+
+    Uses a fresh tenant, never the shared admin dev tenant: uploading and
+    deleting a logo writes real bytes to the local filesystem storage
+    root, which is not part of the per-test DB transaction rollback
+    (`conftest.py`'s `create_savepoint` isolation only covers the
+    database). Running these tests against the shared tenant would
+    permanently overwrite, and then delete, whatever real logo a
+    developer configured through the actual UI.
+    """
+
+    async def test_uploaded_logo_is_embedded_in_the_exported_pdf(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        if not export_registry.is_registered("pdf"):
+            pytest.skip("WeasyPrint native libraries are unavailable in this environment")
+
+        tenant = Tenant(name="Branding PDF Co", slug=f"branding-pdf-{uuid.uuid4().hex[:8]}")
+        db_session.add(tenant)
+        await db_session.commit()
+        tenant_id = tenant.id
+        fish = await _make_fish(db_session, tenant_id, name="Branding PDF Fish")
+        company = await _make_company(db_session, tenant_id, name="Branding PDF Co")
+        invoice = await _make_invoice(db_session, tenant_id, company.id)
+        await _make_plain_invoice_item(db_session, tenant_id, invoice.id, fish.id)
+
+        headers = await _make_user_headers(
+            db_session, tenant_id, ["settings:manage", "reports:view"]
+        )
+        upload = await client.post(
+            "/api/v1/company-profile/logo",
+            headers=headers,
+            files={"file": ("logo.png", _PNG_LOGO_BYTES, "image/png")},
+        )
+        assert upload.status_code == 200
+
+        response = await client.get(
+            f"/api/v1/reports/export?report=fish_sales&format=pdf&fish_id={fish.id}",
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert response.content.startswith(b"%PDF")
+        assert b"/Subtype /Image" in response.content or b"/Subtype/Image" in response.content
+
+    async def test_csv_export_is_unaffected_by_a_configured_logo(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        tenant = Tenant(name="Branding CSV Co", slug=f"branding-csv-{uuid.uuid4().hex[:8]}")
+        db_session.add(tenant)
+        await db_session.commit()
+        tenant_id = tenant.id
+        fish = await _make_fish(db_session, tenant_id, name="Branding CSV Fish")
+        company = await _make_company(db_session, tenant_id, name="Branding CSV Co")
+        invoice = await _make_invoice(db_session, tenant_id, company.id)
+        await _make_plain_invoice_item(db_session, tenant_id, invoice.id, fish.id)
+
+        headers = await _make_user_headers(
+            db_session, tenant_id, ["settings:manage", "reports:view"]
+        )
+        upload = await client.post(
+            "/api/v1/company-profile/logo",
+            headers=headers,
+            files={"file": ("logo.png", _PNG_LOGO_BYTES, "image/png")},
+        )
+        assert upload.status_code == 200
+
+        response = await client.get(
+            f"/api/v1/reports/export?report=fish_sales&format=csv&fish_id={fish.id}",
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
 
 
 class TestExportCustomerLedgerEntriesField:

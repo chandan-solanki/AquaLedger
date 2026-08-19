@@ -19,6 +19,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { NAVIGATION, type NavItem } from "@/config/navigation";
 import { useAuth } from "@/features/auth/hooks/use-auth";
@@ -30,6 +31,7 @@ function isItemActive(pathname: string, href: string): boolean {
 
 function NavGroup({ item, pathname }: { item: NavItem; pathname: string }) {
   const children = item.children ?? [item];
+  const { isMobile, setOpenMobile } = useSidebar();
 
   return (
     <SidebarGroup>
@@ -39,7 +41,12 @@ function NavGroup({ item, pathname }: { item: NavItem; pathname: string }) {
           {children.map((child) => (
             <SidebarMenuItem key={child.id}>
               <SidebarMenuButton asChild isActive={isItemActive(pathname, child.href!)} tooltip={child.title}>
-                <Link href={child.href!}>
+                <Link
+                  href={child.href!}
+                  onClick={() => {
+                    if (isMobile) setOpenMobile(false);
+                  }}
+                >
                   <child.icon />
                   <span>{child.title}</span>
                 </Link>

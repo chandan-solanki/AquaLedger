@@ -63,6 +63,8 @@ def build_customer_payment_receipt_document_data(
     allocations: list[PaymentAllocationDisplay],
     *,
     tenant_name: str,
+    tenant_details: str | None = None,
+    tenant_logo_bytes: bytes | None = None,
     generated_by: str,
 ) -> DocumentData:
     """Converts an already-fetched payment + billed company + resolved
@@ -122,6 +124,8 @@ def build_customer_payment_receipt_document_data(
         document_date=payment.payment_date,
         title="Customer Payment Receipt",
         tenant_name=tenant_name,
+        tenant_details=tenant_details,
+        tenant_logo_bytes=tenant_logo_bytes,
         party=party,
         sections=sections,
         totals=totals,

@@ -77,6 +77,8 @@ def build_invoice_document_data(
     fish_by_id: dict[uuid.UUID, FishResponse],
     *,
     tenant_name: str,
+    tenant_details: str | None = None,
+    tenant_logo_bytes: bytes | None = None,
     generated_by: str,
 ) -> DocumentData:
     """Converts an already-fetched invoice + items + billed company +
@@ -137,6 +139,8 @@ def build_invoice_document_data(
         document_date=invoice.invoice_date,
         title="Invoice",
         tenant_name=tenant_name,
+        tenant_details=tenant_details,
+        tenant_logo_bytes=tenant_logo_bytes,
         party=party,
         sections=sections,
         line_items=line_items,

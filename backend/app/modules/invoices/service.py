@@ -15,6 +15,7 @@ from app.modules.companies.constants import CompanyStatus
 from app.modules.companies.exceptions import CompanyNotFoundError
 from app.modules.companies.schemas import CompanyResponse
 from app.modules.companies.service import CompanyService
+from app.modules.company_profile.service import CompanyProfileService
 from app.modules.fish.exceptions import FishNotFoundError
 from app.modules.fish.schemas import FishResponse
 from app.modules.fish.service import FishService
@@ -78,6 +79,8 @@ class InvoiceDocumentContext(NamedTuple):
     company: CompanyResponse
     fish_by_id: dict[uuid.UUID, FishResponse]
     tenant_name: str
+    tenant_details: str | None
+    tenant_logo_bytes: bytes | None
 
 
 class InvoiceService:
@@ -106,6 +109,7 @@ class InvoiceService:
         # service, never its repository (ARCHITECTURE.md §2 - modules talk
         # to each other only through service.py).
         self._company_service = CompanyService(session)
+        self._company_profile_service = CompanyProfileService(session)
         self._trip_catch_service = TripCatchService(session)
         self._fish_service = FishService(session)
 
@@ -213,13 +217,16 @@ class InvoiceService:
                     raise InvoiceItemFishNotFoundError("The specified fish does not exist") from exc
 
         tenant_name = await self._get_tenant_name(tenant_id)
+        profile_context = await self._company_profile_service.get_document_context(tenant_id)
 
         return InvoiceDocumentContext(
             invoice=self._to_response(invoice),
             items=[self._to_item_response(item) for item in items],
             company=company,
             fish_by_id=fish_by_id,
-            tenant_name=tenant_name,
+            tenant_name=profile_context.display_name or tenant_name,
+            tenant_details=profile_context.tenant_details,
+            tenant_logo_bytes=profile_context.logo_bytes,
         )
 
     async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:

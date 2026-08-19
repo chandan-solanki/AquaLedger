@@ -878,6 +878,8 @@ async def get_purchase_order_document(
         context.items,
         context.supplier,
         tenant_name=context.tenant_name,
+        tenant_details=context.tenant_details,
+        tenant_logo_bytes=context.tenant_logo_bytes,
         generated_by=current_user.full_name,
     )
 

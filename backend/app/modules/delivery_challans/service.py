@@ -14,6 +14,7 @@ from app.modules.auth.models import Tenant
 from app.modules.companies.exceptions import CompanyNotFoundError
 from app.modules.companies.schemas import CompanyResponse
 from app.modules.companies.service import CompanyService
+from app.modules.company_profile.service import CompanyProfileService
 from app.modules.delivery_challans.constants import (
     DELIVERY_CHALLAN_NUMBER_PREFIX,
     DeliveryChallanStatus,
@@ -86,6 +87,8 @@ class DeliveryChallanDocumentContext(NamedTuple):
     previously_delivered_by_item_id: dict[uuid.UUID, Decimal]
     company: CompanyResponse
     tenant_name: str
+    tenant_details: str | None
+    tenant_logo_bytes: bytes | None
 
 
 class DeliveryChallanService:
@@ -127,6 +130,7 @@ class DeliveryChallanService:
         # dependencies exactly.
         self._company_service = CompanyService(session)
         self._fish_service = FishService(session)
+        self._company_profile_service = CompanyProfileService(session)
 
     async def create(
         self,
@@ -367,6 +371,7 @@ class DeliveryChallanService:
         }
 
         tenant_name = await self._get_tenant_name(tenant_id)
+        profile_context = await self._company_profile_service.get_document_context(tenant_id)
 
         return DeliveryChallanDocumentContext(
             delivery_challan=self._to_response(delivery_challan),
@@ -376,7 +381,9 @@ class DeliveryChallanService:
             fish_by_id=fish_by_id,
             previously_delivered_by_item_id=previously_delivered_by_item_id,
             company=company,
-            tenant_name=tenant_name,
+            tenant_name=profile_context.display_name or tenant_name,
+            tenant_details=profile_context.tenant_details,
+            tenant_logo_bytes=profile_context.logo_bytes,
         )
 
     async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:

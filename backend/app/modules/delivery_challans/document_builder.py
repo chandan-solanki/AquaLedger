@@ -65,6 +65,8 @@ def build_delivery_challan_document_data(
     company: CompanyResponse,
     *,
     tenant_name: str,
+    tenant_details: str | None = None,
+    tenant_logo_bytes: bytes | None = None,
     generated_by: str,
 ) -> DocumentData:
     """Converts an already-fetched delivery challan + items + linked
@@ -129,6 +131,8 @@ def build_delivery_challan_document_data(
         document_date=delivery_challan.challan_date,
         title="Delivery Challan",
         tenant_name=tenant_name,
+        tenant_details=tenant_details,
+        tenant_logo_bytes=tenant_logo_bytes,
         party=party,
         line_items=line_items,
         totals=None,

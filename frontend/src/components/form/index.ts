@@ -9,6 +9,7 @@ export { PercentageInput, type PercentageInputProps } from "./PercentageInput";
 export { EmailInput, type EmailInputProps } from "./EmailInput";
 export { PhoneInput, type PhoneInputProps } from "./PhoneInput";
 export { GSTINInput, type GSTINInputProps } from "./GSTINInput";
+export { PANInput, type PANInputProps } from "./PANInput";
 export { TextArea, type TextAreaProps } from "./TextArea";
 
 export { DatePicker, type DatePickerProps } from "./DatePicker";

@@ -481,6 +481,8 @@ async def get_payment_document(
         context.company,
         context.allocations,
         tenant_name=context.tenant_name,
+        tenant_details=context.tenant_details,
+        tenant_logo_bytes=context.tenant_logo_bytes,
         generated_by=current_user.full_name,
     )
 

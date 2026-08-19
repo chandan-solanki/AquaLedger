@@ -1,9 +1,9 @@
 import secrets
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.request_context import RequestContext
 from app.core.config import get_settings
 from app.core.errors import RateLimitError, ValidationError
 from app.modules.auth.constants import AccountStatus
@@ -32,13 +32,6 @@ settings = get_settings()
 # verification attempt - this is what makes the response time-invariant with
 # respect to whether the email exists (anti user-enumeration, ARCHITECTURE §8.2).
 _DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
-
-
-@dataclass(frozen=True, slots=True)
-class RequestContext:
-    ip: str | None
-    user_agent: str | None
-    request_id: str | None
 
 
 class AuthService:

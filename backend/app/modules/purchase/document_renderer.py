@@ -27,6 +27,7 @@ from io import BytesIO
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
 from reportlab.platypus import (
     Flowable,
     KeepTogether,
@@ -41,9 +42,14 @@ from app.core.document_engine.base_document import BaseDocumentRenderer
 from app.core.document_engine.document_models import DocumentData, DocumentLine, DocumentTotals
 from app.core.document_engine.document_types import DocumentType
 from app.core.document_engine.registry import registry
+from app.core.document_engine.reportlab_support import MUTED_TEXT_HEX as _MUTED_TEXT_HEX
 from app.core.document_engine.reportlab_support import PDF_MARGIN as _MARGIN
 from app.core.document_engine.reportlab_support import PDF_PAGE_SIZE as _PAGE_SIZE
 from app.core.document_engine.reportlab_support import NumberedCanvas as _NumberedCanvas
+from app.core.document_engine.reportlab_support import build_card as _build_card
+from app.core.document_engine.reportlab_support import build_header_divider as _build_header_divider
+from app.core.document_engine.reportlab_support import build_logo_flowable as _build_logo_flowable
+from app.core.document_engine.reportlab_support import build_status_badge as _build_status_badge
 
 _MISSING = "-"
 
@@ -89,19 +95,25 @@ def _quantity(value: Decimal | None) -> str:
 
 
 def _build_header(data: DocumentData, usable_width: float) -> Table:
-    left: list[Flowable] = [Paragraph(data.tenant_name, _TENANT_NAME_STYLE)]
+    left: list[Flowable] = []
+    logo = _build_logo_flowable(data.tenant_logo_bytes, max_width=28 * mm, max_height=18 * mm)
+    if logo is not None:
+        left.append(logo)
+    left.append(Paragraph(data.tenant_name, _TENANT_NAME_STYLE))
     if data.tenant_details:
-        left.append(Paragraph(data.tenant_details, _BODY_STYLE))
+        muted_details = f'<font color="{_MUTED_TEXT_HEX}">{data.tenant_details}</font>'
+        left.append(Paragraph(muted_details, _BODY_STYLE))
 
     right_lines = [
         f"<b>{data.title.upper()}</b>",
         f"No: {data.document_number}",
         f"Date: {data.document_date.strftime('%d %b %Y')}",
     ]
+    right: list[Flowable] = [Paragraph("<br/>".join(right_lines), _DOCUMENT_TITLE_STYLE)]
     status = data.metadata.get("status") if data.metadata else None
     if status:
-        right_lines.append(f"Status: {str(status).replace('_', ' ').title()}")
-    right = [Paragraph("<br/>".join(right_lines), _DOCUMENT_TITLE_STYLE)]
+        right.append(Spacer(1, 4))
+        right.append(_build_status_badge(str(status)))
 
     table = Table([[left, right]], colWidths=[usable_width * 0.6, usable_width * 0.4])
     table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
@@ -122,12 +134,15 @@ def _build_party_section(data: DocumentData) -> list[Flowable]:
         lines.append(f"Email: {data.party.email}")
     if data.party.tax_id:
         lines.append(f"GSTIN: {data.party.tax_id}")
+    body = "<br/>".join(
+        line if index == 0 else f'<font color="{_MUTED_TEXT_HEX}">{line}</font>'
+        for index, line in enumerate(lines)
+    )
     return [
         # "Supplier", not "Bill To" - a purchase bill's counterparty is
         # who we bought from, the opposite direction from an invoice's
         # customer.
-        Paragraph("Supplier", _SECTION_HEADING_STYLE),
-        Paragraph("<br/>".join(lines), _BODY_STYLE),
+        _build_card([Paragraph("Supplier", _SECTION_HEADING_STYLE), Paragraph(body, _BODY_STYLE)])
     ]
 
 
@@ -204,17 +219,30 @@ def _build_totals_table(totals: DocumentTotals) -> Table:
     rows.append(("Total", _money(totals.total)))
     if totals.paid is not None:
         rows.append(("Paid", _money(totals.paid)))
+    balance_row_index: int | None = None
     if totals.balance is not None:
+        balance_row_index = len(rows)
         rows.append(("Balance Due", _money(totals.balance)))
 
     table_data = [
         [Paragraph(label, _BODY_STYLE), Paragraph(value, _BODY_RIGHT_STYLE)]
         for label, value in rows
     ]
+    if balance_row_index is not None and totals.balance is not None:
+        # Green once nothing is owed, red while a balance remains - the
+        # same at-a-glance signal a status badge gives, applied to the
+        # one number on the page a reader actually needs to act on.
+        balance_hex = "#991b1b" if totals.balance > 0 else "#065f46"
+        table_data[balance_row_index][1] = Paragraph(
+            f'<b><font color="{balance_hex}">{_money(totals.balance)}</font></b>',
+            _BODY_RIGHT_STYLE,
+        )
+
     table = Table(table_data, colWidths=[120, 90], hAlign="RIGHT")
     table.setStyle(
         TableStyle(
             [
+                ("BACKGROUND", (0, total_row_index), (-1, -1), colors.HexColor("#f3f4f6")),
                 ("LINEABOVE", (0, total_row_index), (-1, total_row_index), 0.75, colors.black),
                 ("FONTNAME", (0, total_row_index), (-1, total_row_index), "Helvetica-Bold"),
                 ("TOPPADDING", (0, 0), (-1, -1), 2),
@@ -262,7 +290,7 @@ class PurchaseBillDocumentRenderer(BaseDocumentRenderer):
             pageCompression=0,
         )
 
-        story: list[Flowable] = [_build_header(data, usable_width), Spacer(1, 14)]
+        story: list[Flowable] = [_build_header(data, usable_width), _build_header_divider()]
         story.extend(_build_party_section(data))
         story.append(Spacer(1, 10))
         story.append(_build_line_items_table(data.line_items, usable_width))

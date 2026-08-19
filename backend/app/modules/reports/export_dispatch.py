@@ -31,6 +31,7 @@ from app.core.report_export.exceptions import UnsupportedReportError
 from app.core.report_export.export_models import ReportExportData, ReportFilterDisplay, ReportType
 from app.modules.auth.models import Tenant
 from app.modules.companies.service import CompanyService
+from app.modules.company_profile.service import CompanyProfileService
 from app.modules.reports.schemas import (
     AgingReportParams,
     BoatProfitabilityParams,
@@ -235,6 +236,34 @@ async def _get_tenant_name(session: AsyncSession, tenant_id: uuid.UUID) -> str:
     return result.scalar_one()
 
 
+async def _with_tenant_logo(
+    data: ReportExportData, session: AsyncSession, tenant_id: uuid.UUID, *, export_format: str
+) -> ReportExportData:
+    """Attaches the tenant's logo and Company Profile display name (if
+    any) onto an already-built ReportExportData via `model_copy` - both
+    are identical across every report/statement a tenant exports, so
+    they're set once here after the fact rather than threaded through
+    each of the 9 report + 2 statement build_*_export_data() methods,
+    none of which otherwise knows anything about Company Profile. Only
+    PDF renders a logo (report.html/report.css) - Excel already has its
+    own text heading and CSV stays raw, so the profile/storage read is
+    skipped entirely for those formats rather than performed and then
+    ignored. The tenant_name override falls back to the raw Tenant.name
+    already baked into `data` (from _get_tenant_name) when the profile
+    has no display_name/legal_name set - same precedence used by the 6
+    document-generating modules' get_document_context()."""
+    if export_format != "pdf":
+        return data
+    profile_context = await CompanyProfileService(session).get_document_context(tenant_id)
+    return data.model_copy(
+        update={
+            "tenant_name": profile_context.display_name or data.tenant_name,
+            "tenant_logo_bytes": profile_context.logo_bytes,
+            "tenant_logo_content_type": profile_context.logo_content_type,
+        }
+    )
+
+
 async def build_report_export_data(
     service: ReportsService,
     session: AsyncSession,
@@ -243,6 +272,7 @@ async def build_report_export_data(
     query_params: dict[str, str],
     tenant_id: uuid.UUID,
     generated_by: str,
+    export_format: str,
 ) -> ReportExportData:
     spec = _SPECS[report_type]
     params = parse_params(spec.params_cls, query_params)
@@ -251,9 +281,10 @@ async def build_report_export_data(
     full_response = await _fetch_all_rows(spec, service, params, tenant_id)
     tenant_name = await _get_tenant_name(session, tenant_id)
 
-    return spec.build(
+    data = spec.build(
         full_response, generated_by=generated_by, tenant_name=tenant_name, filters=filters
     )
+    return await _with_tenant_logo(data, session, tenant_id, export_format=export_format)
 
 
 # -- Customer/Supplier Statements (TASKS.md Sprint 11 Session 5 Phase C) ----
@@ -277,6 +308,7 @@ async def fetch_customer_statement_export_data(
     params: CustomerLedgerParams,
     tenant_id: uuid.UUID,
     generated_by: str,
+    export_format: str,
 ) -> ReportExportData:
     async def fetch_page(page: int) -> CustomerLedgerResponse:
         page_params = params.model_copy(update={"page": page, "page_size": _EXPORT_PAGE_SIZE})
@@ -286,7 +318,7 @@ async def fetch_customer_statement_export_data(
     company = await CompanyService(session).get(params.customer_id, tenant_id=tenant_id)
     tenant_name = await _get_tenant_name(session, tenant_id)
 
-    return build_customer_statement_export_data(
+    data = build_customer_statement_export_data(
         ledger,
         company,
         generated_by=generated_by,
@@ -294,6 +326,7 @@ async def fetch_customer_statement_export_data(
         from_date=params.from_date,
         to_date=params.to_date,
     )
+    return await _with_tenant_logo(data, session, tenant_id, export_format=export_format)
 
 
 async def fetch_supplier_statement_export_data(
@@ -303,6 +336,7 @@ async def fetch_supplier_statement_export_data(
     params: SupplierLedgerParams,
     tenant_id: uuid.UUID,
     generated_by: str,
+    export_format: str,
 ) -> ReportExportData:
     async def fetch_page(page: int) -> SupplierLedgerResponse:
         page_params = params.model_copy(update={"page": page, "page_size": _EXPORT_PAGE_SIZE})
@@ -312,7 +346,7 @@ async def fetch_supplier_statement_export_data(
     supplier = await SupplierService(session).get(params.supplier_id, tenant_id=tenant_id)
     tenant_name = await _get_tenant_name(session, tenant_id)
 
-    return build_supplier_statement_export_data(
+    data = build_supplier_statement_export_data(
         ledger,
         supplier,
         generated_by=generated_by,
@@ -320,3 +354,4 @@ async def fetch_supplier_statement_export_data(
         from_date=params.from_date,
         to_date=params.to_date,
     )
+    return await _with_tenant_logo(data, session, tenant_id, export_format=export_format)

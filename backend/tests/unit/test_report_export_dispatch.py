@@ -6,15 +6,23 @@ AsyncSession, no real report); `tests/integration/test_reports_export_api.py`
 covers the real end-to-end flow against seeded data.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 from pydantic import BaseModel
 
 from app.core.report_export.exceptions import UnsupportedReportError
-from app.core.report_export.export_models import ReportType
+from app.core.report_export.export_models import (
+    ReportColumn,
+    ReportExportData,
+    ReportRow,
+    ReportType,
+)
 from app.modules.reports.export_dispatch import (
     _describe_filters,
     _fetch_all_rows,
     _ReportExportSpec,
+    _with_tenant_logo,
     parse_params,
     parse_report_type,
 )
@@ -169,3 +177,40 @@ class TestFetchAllRows:
             spec, service=object(), params=_FakeParams(page=5, page_size=10), tenant_id=object()
         )
         assert seen_page_sizes == [100]
+
+
+def _make_export_data() -> ReportExportData:
+    return ReportExportData(
+        title="Fish Sales",
+        columns=[ReportColumn(title="Fish", key="fish")],
+        rows=[ReportRow(data={"fish": "Pomfret"})],
+        generated_at=datetime(2026, 8, 17, tzinfo=UTC),
+        generated_by="admin@fisherp.test",
+        tenant_name="Konkan Traders",
+    )
+
+
+class TestWithTenantLogo:
+    """Sprint 14 (Company Profile): _with_tenant_logo attaches the tenant's
+    logo onto an already-built ReportExportData via model_copy - the one
+    place tenant_logo_bytes/tenant_logo_content_type are ever set, so
+    none of the 9 report + 2 statement build_*_export_data() methods
+    needs to know Company Profile exists."""
+
+    async def test_non_pdf_formats_return_the_data_unchanged_without_touching_the_session(
+        self,
+    ) -> None:
+        data = _make_export_data()
+        # A session that raises if anything tries to use it - proves the
+        # CompanyProfileService lookup is skipped entirely for csv/excel,
+        # not performed and then ignored.
+        poison_session = object()
+
+        result_csv = await _with_tenant_logo(data, poison_session, object(), export_format="csv")
+        result_excel = await _with_tenant_logo(
+            data, poison_session, object(), export_format="excel"
+        )
+
+        assert result_csv is data
+        assert result_excel is data
+        assert result_csv.tenant_logo_bytes is None

@@ -15,6 +15,7 @@ from app.modules.companies.constants import CompanyStatus
 from app.modules.companies.exceptions import CompanyNotFoundError
 from app.modules.companies.schemas import CompanyResponse
 from app.modules.companies.service import CompanyService
+from app.modules.company_profile.service import CompanyProfileService
 from app.modules.invoices.constants import InvoiceStatus
 from app.modules.invoices.exceptions import InvoiceNotFoundError
 from app.modules.invoices.schemas import InvoiceResponse
@@ -89,6 +90,8 @@ class PaymentDocumentContext(NamedTuple):
     company: CompanyResponse
     allocations: list[PaymentAllocationDisplay]
     tenant_name: str
+    tenant_details: str | None
+    tenant_logo_bytes: bytes | None
 
 
 class PaymentService:
@@ -124,6 +127,7 @@ class PaymentService:
         # to each other only through service.py).
         self._company_service = CompanyService(session)
         self._invoice_service = InvoiceService(session)
+        self._company_profile_service = CompanyProfileService(session)
 
     async def create(
         self, payload: PaymentCreateRequest, *, tenant_id: uuid.UUID, actor_id: uuid.UUID
@@ -200,12 +204,15 @@ class PaymentService:
             )
 
         tenant_name = await self._get_tenant_name(tenant_id)
+        profile_context = await self._company_profile_service.get_document_context(tenant_id)
 
         return PaymentDocumentContext(
             payment=self._to_response(payment),
             company=company,
             allocations=allocation_displays,
-            tenant_name=tenant_name,
+            tenant_name=profile_context.display_name or tenant_name,
+            tenant_details=profile_context.tenant_details,
+            tenant_logo_bytes=profile_context.logo_bytes,
         )
 
     async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:

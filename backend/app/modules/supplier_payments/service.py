@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
 from app.modules.auth.models import Tenant
+from app.modules.company_profile.service import CompanyProfileService
 from app.modules.purchase.constants import PurchaseStatus
 from app.modules.purchase.exceptions import PurchaseBillNotFoundError
 from app.modules.purchase.schemas import PurchaseBillResponse
@@ -101,6 +102,8 @@ class SupplierPaymentDocumentContext(NamedTuple):
     supplier: SupplierResponse
     allocations: list[SupplierPaymentAllocationDisplay]
     tenant_name: str
+    tenant_details: str | None
+    tenant_logo_bytes: bytes | None
 
 
 class SupplierPaymentService:
@@ -142,6 +145,7 @@ class SupplierPaymentService:
         self._purchase_service = PurchaseService(
             session, purchase_order_service=PurchaseOrderService(session)
         )
+        self._company_profile_service = CompanyProfileService(session)
 
     async def create(
         self,
@@ -231,12 +235,15 @@ class SupplierPaymentService:
             )
 
         tenant_name = await self._get_tenant_name(tenant_id)
+        profile_context = await self._company_profile_service.get_document_context(tenant_id)
 
         return SupplierPaymentDocumentContext(
             supplier_payment=self._to_response(supplier_payment),
             supplier=supplier,
             allocations=allocation_displays,
-            tenant_name=tenant_name,
+            tenant_name=profile_context.display_name or tenant_name,
+            tenant_details=profile_context.tenant_details,
+            tenant_logo_bytes=profile_context.logo_bytes,
         )
 
     async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:

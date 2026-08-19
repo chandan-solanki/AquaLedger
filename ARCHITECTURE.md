@@ -742,6 +742,19 @@ Note **Boat Manager sees boat profit but not sales/customer data**, and **Sales 
 3. **Row level** — Postgres RLS for `tenant_id`. Defence in depth: even a SQL-injection or a forgotten `WHERE` clause cannot cross tenants.
 4. **UI level** — hide/disable controls the user lacks permission for. **Cosmetic only. Never the security boundary.**
 
+### 9.4 Roles & Permissions Administration (Sprint 14 Session 4)
+
+`GET /roles`, `GET /roles/{id}` and `GET /roles/permissions` (`app/modules/roles/`) let an
+administrator see exactly what each role grants and who holds it. This module is
+**read-only by design** — Sec 9.1's "roles are a bundling convenience that admins can edit" is
+the eventual intent, not yet a shipped capability. There is no endpoint to assign or revoke a
+role's permissions: every seeded role is `is_system=True`, no repository/service helper for
+mutating `role_permissions` exists to build on, and `require_permission` reads permissions from
+the JWT (Sec 9.3's trade-off), so an edit wouldn't even take effect for an already-logged-in
+holder of that role until their token expires. Building that safely — with guardrails
+equivalent to the Users module's last-active-administrator protection — is deferred to a future
+session, not silently dropped.
+
 ---
 
 ## 10. State Management
@@ -1608,6 +1621,8 @@ contracts        import-linter (module boundaries) + OpenAPI diff
 
 **UI:** timeline on every entity detail page ("who changed this invoice, when, from what") and a global audit search for Admin/Manager. This feature pays for itself the first time a customer disputes an amount.
 
+**Current implementation (Sprint 14 Session 5):** the above is the eventual vision, not what exists today. What's actually built: `audit_logs` (tenant-scoped, append-only — no `updated_at` on the model) is written to by explicit calls from `AuthRepository.add_audit_log`, invoked from the Auth module (`login_success`, `login_failed`, `logout`, `password_changed`) and, as of this session, the Users module (`user_created`, `user_updated`, `user_activated`, `user_deactivated`, `user_role_changed`) — each call lands in the same commit as the business mutation it records, so a failed mutation never leaves behind a misleading successful audit row. There is no `before_flush` auto-diffing, no SHA-256 hash chain, and no partitioning/retention job — none of those exist yet. Reading is exposed read-only via `GET /audit-logs` (tenant-scoped, filterable by actor/action/entity_type/date range, paginated), gated on `audit_log:view` — a permission distinct from `user:manage` that pre-dated this session in the seed data. There is no create/update/delete endpoint of any kind: audit rows are immutable application-level history, enforced by never exposing a mutation path, not by a database trigger. Business modules beyond Auth and Users do not yet write audit records — extending coverage to invoices, payments, and the rest of §37's captured list remains future work.
+
 ---
 
 ## 38. Soft Delete Strategy
@@ -1763,6 +1778,8 @@ app/core/report_export/
 ```
 
 `ReportExportData` is the one shape every exporter consumes — `title`, `subtitle`, `filters` (label/value pairs — doubles as a document's "party info" block for statements), `columns`, `rows`, `summary`, `generated_at`, `generated_by`, `tenant_name`, `footer`. A report module builds one of these from data it already fetched; the engine never queries anything itself.
+
+**Company Profile branding (Sprint 14 Session 1):** `export_dispatch.py`'s `_with_tenant_logo()` overlays the tenant's Company Profile `display_name` and logo onto an already-built `ReportExportData` via `model_copy`, once, after every report/statement is built — no report module or exporter itself knows about Company Profile. This only runs for `format=pdf`: Excel already prints its own text heading and CSV stays raw, so the profile/logo storage read is skipped entirely for those formats rather than performed and discarded.
 
 ```mermaid
 flowchart LR

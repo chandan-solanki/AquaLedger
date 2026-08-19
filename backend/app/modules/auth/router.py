@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request, status
 
+from app.common.request_context import build_request_context
 from app.common.schemas import ErrorResponse
 from app.modules.auth.dependencies import get_auth_service, get_current_user
 from app.modules.auth.models import User
@@ -10,21 +11,13 @@ from app.modules.auth.schemas import (
     TokenResponse,
     UserProfileResponse,
 )
-from app.modules.auth.service import AuthService, RequestContext
+from app.modules.auth.service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _AUTH_ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
     401: {"model": ErrorResponse, "description": "Invalid credentials or token"},
 }
-
-
-def _build_context(request: Request) -> RequestContext:
-    return RequestContext(
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        request_id=getattr(request.state, "request_id", None),
-    )
 
 
 @router.post(
@@ -49,7 +42,7 @@ async def login(
     request: Request,
     service: AuthService = Depends(get_auth_service),
 ) -> TokenResponse:
-    return await service.login(payload.email, payload.password, _build_context(request))
+    return await service.login(payload.email, payload.password, build_request_context(request))
 
 
 @router.post(
@@ -70,7 +63,7 @@ async def refresh(
     request: Request,
     service: AuthService = Depends(get_auth_service),
 ) -> TokenResponse:
-    return await service.refresh(payload.refresh_token, _build_context(request))
+    return await service.refresh(payload.refresh_token, build_request_context(request))
 
 
 @router.post(
@@ -90,7 +83,7 @@ async def logout(
     current_user: User = Depends(get_current_user),
     service: AuthService = Depends(get_auth_service),
 ) -> None:
-    await service.logout(current_user, payload.refresh_token, _build_context(request))
+    await service.logout(current_user, payload.refresh_token, build_request_context(request))
 
 
 @router.get(
@@ -132,5 +125,5 @@ async def change_password(
     service: AuthService = Depends(get_auth_service),
 ) -> None:
     await service.change_password(
-        current_user, payload.current_password, payload.new_password, _build_context(request)
+        current_user, payload.current_password, payload.new_password, build_request_context(request)
     )

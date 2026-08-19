@@ -105,6 +105,7 @@ class DocumentData(BaseModel):
     subtitle: str | None = None
     tenant_name: str
     tenant_details: str | None = None
+    tenant_logo_bytes: bytes | None = None
     party: DocumentParty | None = None
     sections: list[DocumentSection] = Field(default_factory=list)
     line_items: list[DocumentLine] = Field(default_factory=list)

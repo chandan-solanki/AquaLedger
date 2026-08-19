@@ -121,6 +121,15 @@ class ReportExportData(BaseModel):
     generated_by: str
     tenant_name: str
     footer: str | None = None
+    # Sprint 14 (Company Profile) - optional org logo for the PDF exporter's
+    # header. Set after the fact via `model_copy` in
+    # app.modules.reports.export_dispatch, never threaded through every
+    # report's own build_*_export_data() method: the logo is identical
+    # across every report/statement a tenant exports, so there is nothing
+    # report-specific about it worth plumbing through 11 separate method
+    # signatures for. ExcelExporter/CSVExporter never read this field.
+    tenant_logo_bytes: bytes | None = None
+    tenant_logo_content_type: str | None = None
 
     @model_validator(mode="after")
     def _check_columns(self) -> "ReportExportData":

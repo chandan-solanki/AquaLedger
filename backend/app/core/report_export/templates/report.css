@@ -58,6 +58,12 @@ body {
   justify-content: center;
 }
 
+.logo-image {
+  width: 32pt;
+  height: 32pt;
+  object-fit: contain;
+}
+
 .tenant-name {
   font-size: 11pt;
   font-weight: bold;

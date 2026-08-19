@@ -16,12 +16,14 @@ export interface AuthenticatedBackendRequestInit {
   body?: unknown;
 }
 
-async function fetchBackend(
-  path: string,
-  accessToken: string,
-  init: AuthenticatedBackendRequestInit
-): Promise<Response> {
-  return fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
+/** Builds the actual `RequestInit` from an access token - parameterized so
+ * `performAuthenticatedRequest` can share its retry/refresh logic across
+ * JSON, binary and (now) multipart form request shapes without each one
+ * reimplementing that contract. */
+type BuildRequestInit = (accessToken: string) => RequestInit;
+
+function jsonRequestInit(init: AuthenticatedBackendRequestInit): BuildRequestInit {
+  return (accessToken) => ({
     method: init.method ?? "GET",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -30,6 +32,10 @@ async function fetchBackend(
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     cache: "no-store",
   });
+}
+
+async function fetchBackend(path: string, buildInit: BuildRequestInit, accessToken: string): Promise<Response> {
+  return fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, buildInit(accessToken));
 }
 
 async function toBackendAuthError(response: Response): Promise<BackendAuthError> {
@@ -60,7 +66,7 @@ async function parseJsonBody<T>(response: Response): Promise<T> {
  */
 async function performAuthenticatedRequest<T>(
   path: string,
-  init: AuthenticatedBackendRequestInit,
+  buildInit: BuildRequestInit,
   parse: (response: Response) => Promise<T>
 ): Promise<T> {
   const accessToken = await getAccessToken();
@@ -68,7 +74,7 @@ async function performAuthenticatedRequest<T>(
   if (accessToken) {
     let response: Response;
     try {
-      response = await fetchBackend(path, accessToken, init);
+      response = await fetchBackend(path, buildInit, accessToken);
     } catch (cause) {
       throw new BackendAuthError(
         buildNetworkError(cause instanceof Error ? cause.message : "Unable to reach the backend.")
@@ -103,7 +109,7 @@ async function performAuthenticatedRequest<T>(
 
   let retryResponse: Response;
   try {
-    retryResponse = await fetchBackend(path, nextAccessToken, init);
+    retryResponse = await fetchBackend(path, buildInit, nextAccessToken);
   } catch (cause) {
     throw new BackendAuthError(
       buildNetworkError(cause instanceof Error ? cause.message : "Unable to reach the backend.")
@@ -120,7 +126,7 @@ export async function authenticatedBackendRequest<T>(
   path: string,
   init: AuthenticatedBackendRequestInit = {}
 ): Promise<T> {
-  return performAuthenticatedRequest(path, init, parseJsonBody<T>);
+  return performAuthenticatedRequest(path, jsonRequestInit(init), parseJsonBody<T>);
 }
 
 /** Same auth/refresh/retry contract as `authenticatedBackendRequest`, but
@@ -132,5 +138,25 @@ export async function authenticatedBackendBinaryRequest(
   path: string,
   init: AuthenticatedBackendRequestInit = {}
 ): Promise<Response> {
-  return performAuthenticatedRequest(path, init, async (response) => response);
+  return performAuthenticatedRequest(path, jsonRequestInit(init), async (response) => response);
+}
+
+/** Same auth/refresh/retry contract as `authenticatedBackendRequest`, for
+ * the one shape those two don't cover: a multipart file upload (Sprint 14's
+ * Company Profile logo, the first upload this codebase has needed). No
+ * `Content-Type` header is set here - `fetch` derives
+ * `multipart/form-data; boundary=...` itself from the `FormData` body, the
+ * same reason `jsonRequestInit` only sets `Content-Type` when a JSON body
+ * is actually present. */
+export async function authenticatedBackendFormRequest<T>(path: string, formData: FormData): Promise<T> {
+  return performAuthenticatedRequest(
+    path,
+    (accessToken) => ({
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: formData,
+      cache: "no-store",
+    }),
+    parseJsonBody<T>
+  );
 }

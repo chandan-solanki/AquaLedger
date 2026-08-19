@@ -599,6 +599,8 @@ async def get_delivery_challan_document(
         context.previously_delivered_by_item_id,
         context.company,
         tenant_name=context.tenant_name,
+        tenant_details=context.tenant_details,
+        tenant_logo_bytes=context.tenant_logo_bytes,
         generated_by=current_user.full_name,
     )
 

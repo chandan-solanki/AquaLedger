@@ -432,3 +432,36 @@ class TestBuildInvoiceDocumentData:
                 tenant_name="Konkan Traders",
                 generated_by="admin@fisherp.test",
             )
+
+
+class TestCompanyProfileFields:
+    """Sprint 14: tenant_details/tenant_logo_bytes are new, optional
+    keyword-only params threaded straight onto DocumentData - the
+    company_profile module (not this builder) is responsible for
+    formatting/fetching them."""
+
+    def test_defaults_to_none_when_omitted(self) -> None:
+        data = build_invoice_document_data(
+            _make_invoice(),
+            [_make_item()],
+            _make_company(),
+            {_FISH_ID_A: _make_fish(_FISH_ID_A, "Pomfret")},
+            tenant_name="Konkan Traders",
+            generated_by="admin@fisherp.test",
+        )
+        assert data.tenant_details is None
+        assert data.tenant_logo_bytes is None
+
+    def test_passes_through_when_supplied(self) -> None:
+        data = build_invoice_document_data(
+            _make_invoice(),
+            [_make_item()],
+            _make_company(),
+            {_FISH_ID_A: _make_fish(_FISH_ID_A, "Pomfret")},
+            tenant_name="Konkan Traders",
+            tenant_details="12 Harbour Road<br/>GSTIN: 27ABCDE1234F1Z5",
+            tenant_logo_bytes=b"fake-logo-bytes",
+            generated_by="admin@fisherp.test",
+        )
+        assert data.tenant_details == "12 Harbour Road<br/>GSTIN: 27ABCDE1234F1Z5"
+        assert data.tenant_logo_bytes == b"fake-logo-bytes"

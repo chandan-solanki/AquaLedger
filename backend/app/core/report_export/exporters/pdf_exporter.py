@@ -1,3 +1,4 @@
+import base64
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,9 @@ class PDFExporter(BaseExporter):
             subtitle=data.subtitle,
             tenant_name=data.tenant_name,
             tenant_initials=cls._initials(data.tenant_name),
+            tenant_logo_data_uri=cls._logo_data_uri(
+                data.tenant_logo_bytes, data.tenant_logo_content_type
+            ),
             generated_at=data.generated_at.strftime("%Y-%m-%d %H:%M"),
             generated_by=data.generated_by,
             footer=data.footer,
@@ -74,6 +78,16 @@ class PDFExporter(BaseExporter):
             rows=rows,
             is_landscape=len(data.columns) > _LANDSCAPE_COLUMN_THRESHOLD,
         )
+
+    @staticmethod
+    def _logo_data_uri(logo_bytes: bytes | None, content_type: str | None) -> str | None:
+        """WeasyPrint renders a `data:` URI `<img>` directly, no filesystem/
+        URL dependency needed - falls back to the existing initials
+        placeholder (report.html) when no logo is set, exactly as before
+        this field existed."""
+        if not logo_bytes or not content_type:
+            return None
+        return f"data:{content_type};base64,{base64.b64encode(logo_bytes).decode('ascii')}"
 
     @staticmethod
     def _initials(tenant_name: str) -> str:

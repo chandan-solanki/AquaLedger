@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
 from app.modules.auth.models import Tenant
+from app.modules.company_profile.service import CompanyProfileService
 from app.modules.purchase_orders.constants import PURCHASE_ORDER_NUMBER_PREFIX, PurchaseOrderStatus
 from app.modules.purchase_orders.domain.numbering import (
     fiscal_year_for,
@@ -61,6 +62,8 @@ class PurchaseOrderDocumentContext(NamedTuple):
     items: list[PurchaseOrderItemResponse]
     supplier: SupplierResponse
     tenant_name: str
+    tenant_details: str | None
+    tenant_logo_bytes: bytes | None
 
 
 class PurchaseOrderService:
@@ -87,6 +90,7 @@ class PurchaseOrderService:
         self._session = session
         self._repo = PurchaseOrderRepository(session)
         self._supplier_service = SupplierService(session)
+        self._company_profile_service = CompanyProfileService(session)
 
     async def create(
         self, payload: PurchaseOrderCreateRequest, *, tenant_id: uuid.UUID, actor_id: uuid.UUID
@@ -418,12 +422,15 @@ class PurchaseOrderService:
             ) from exc
 
         tenant_name = await self._get_tenant_name(tenant_id)
+        profile_context = await self._company_profile_service.get_document_context(tenant_id)
 
         return PurchaseOrderDocumentContext(
             purchase_order=self._to_response(purchase_order),
             items=[self._to_item_response(item) for item in items],
             supplier=supplier,
-            tenant_name=tenant_name,
+            tenant_name=profile_context.display_name or tenant_name,
+            tenant_details=profile_context.tenant_details,
+            tenant_logo_bytes=profile_context.logo_bytes,
         )
 
     async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:

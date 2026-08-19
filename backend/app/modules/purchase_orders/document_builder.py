@@ -62,6 +62,8 @@ def build_purchase_order_document_data(
     supplier: SupplierResponse,
     *,
     tenant_name: str,
+    tenant_details: str | None = None,
+    tenant_logo_bytes: bytes | None = None,
     generated_by: str,
 ) -> DocumentData:
     """Converts an already-fetched purchase order + items + supplier
@@ -123,6 +125,8 @@ def build_purchase_order_document_data(
         document_date=purchase_order.order_date,
         title="Purchase Order",
         tenant_name=tenant_name,
+        tenant_details=tenant_details,
+        tenant_logo_bytes=tenant_logo_bytes,
         party=party,
         sections=sections,
         line_items=line_items,

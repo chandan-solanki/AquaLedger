@@ -339,6 +339,7 @@ async def export_report(
         query_params=dict(request.query_params),
         tenant_id=current_user.tenant_id,
         generated_by=current_user.full_name,
+        export_format=format,
     )
 
     content = ExportService().export(
@@ -398,6 +399,7 @@ async def export_customer_statement(
         params=params,
         tenant_id=current_user.tenant_id,
         generated_by=current_user.full_name,
+        export_format=format,
     )
 
     content = ExportService().export(
@@ -440,6 +442,7 @@ async def export_supplier_statement(
         params=params,
         tenant_id=current_user.tenant_id,
         generated_by=current_user.full_name,
+        export_format=format,
     )
 
     content = ExportService().export(

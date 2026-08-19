@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.schemas import PaginatedResponse, PaginationMeta
 from app.core.errors import AppException, ConflictError
 from app.modules.auth.models import Tenant
+from app.modules.company_profile.service import CompanyProfileService
 from app.modules.purchase.constants import PURCHASE_NUMBER_PREFIX, PurchaseStatus
 from app.modules.purchase.domain.numbering import fiscal_year_for, format_purchase_number
 from app.modules.purchase.domain.totals import (
@@ -79,6 +80,8 @@ class PurchaseBillDocumentContext(NamedTuple):
     items: list[PurchaseBillItemResponse]
     supplier: SupplierResponse
     tenant_name: str
+    tenant_details: str | None
+    tenant_logo_bytes: bytes | None
 
 
 class PurchaseService:
@@ -115,6 +118,7 @@ class PurchaseService:
         self._session = session
         self._repo = PurchaseRepository(session)
         self._supplier_service = SupplierService(session)
+        self._company_profile_service = CompanyProfileService(session)
         # Sprint 12 Session 12: the one dependency that lets a purchase
         # bill validate/resolve its optional purchase order linkage.
         # PurchaseOrderService itself has no dependency back on this
@@ -225,12 +229,15 @@ class PurchaseService:
             ) from exc
 
         tenant_name = await self._get_tenant_name(tenant_id)
+        profile_context = await self._company_profile_service.get_document_context(tenant_id)
 
         return PurchaseBillDocumentContext(
             purchase_bill=self._to_response(purchase_bill),
             items=[self._to_item_response(item) for item in items],
             supplier=supplier,
-            tenant_name=tenant_name,
+            tenant_name=profile_context.display_name or tenant_name,
+            tenant_details=profile_context.tenant_details,
+            tenant_logo_bytes=profile_context.logo_bytes,
         )
 
     async def _get_tenant_name(self, tenant_id: uuid.UUID) -> str:
