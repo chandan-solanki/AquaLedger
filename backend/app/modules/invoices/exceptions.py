@@ -91,7 +91,14 @@ class InvoiceInsufficientInventoryError(BusinessRuleError):
     same check at item add/update time: that one runs against an unlocked
     read and can go stale (another invoice may be issued against the same
     trip catch in the meantime), so issue must re-check under lock and
-    reports the failure with its own code."""
+    reports the failure with its own code.
+
+    Sprint 15 Session 6: always raised with the same `details` dict
+    TripCatchInsufficientQuantityError carried (trip_catch_id,
+    requested_quantity, available_quantity), forwarded unchanged - see
+    InvoiceService.issue. The frontend uses `details.trip_catch_id` to call
+    GET /invoices/trip-catches/{id}/conflicts and show which other invoices
+    may be competing for the same catch."""
 
     code = "INVOICE_INSUFFICIENT_INVENTORY"
 

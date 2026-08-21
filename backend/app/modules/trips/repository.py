@@ -131,3 +131,18 @@ class TripRepository:
             )
         )
         return list(result.scalars().all())
+
+    async def get_many_by_ids(self, tenant_id: uuid.UUID, trip_ids: list[uuid.UUID]) -> list[Trip]:
+        """Bulk trip lookup by id, tenant-scoped - for other modules' detail
+        views that need to resolve trip_number for a small, already-known set
+        of trip ids (e.g. trip_catches' Fish Stock detail's contributing-
+        catches list). Deliberately does NOT exclude soft-deleted trips: a
+        trip catch's own history shouldn't lose its trip_number just because
+        the trip was later soft-deleted. Cross-module access still goes
+        through TripService only (ARCHITECTURE.md §2)."""
+        if not trip_ids:
+            return []
+        result = await self._session.execute(
+            select(Trip).where(Trip.tenant_id == tenant_id, Trip.id.in_(trip_ids))
+        )
+        return list(result.scalars().all())

@@ -1,8 +1,9 @@
 import uuid
+from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import Row, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.companies.constants import CompanyStatus, CompanyType
@@ -53,6 +54,27 @@ class CompanyRepository:
             .with_for_update()
         )
         return result.scalar_one_or_none()
+
+    async def get_names_by_ids(
+        self, tenant_id: uuid.UUID, company_ids: list[uuid.UUID]
+    ) -> Sequence[Row[Any]]:
+        """Bulk `(id, name)` lookup, tenant-scoped, excluding soft-deleted
+        companies. Sprint 15 Session 6: lets the invoices module resolve
+        every conflicting invoice's company name in one query instead of
+        one `get()` per row (ARCHITECTURE.md §2 - cross-module access goes
+        through CompanyService, never this repository, directly). Selects
+        only `id`/`name` rather than hydrating full `Company` rows - the
+        caller never needs anything else."""
+        if not company_ids:
+            return []
+        result = await self._session.execute(
+            select(Company.id, Company.name).where(
+                Company.tenant_id == tenant_id,
+                Company.id.in_(company_ids),
+                Company.deleted_at.is_(None),
+            )
+        )
+        return result.all()
 
     async def search(
         self,

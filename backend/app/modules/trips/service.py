@@ -162,6 +162,16 @@ class TripService:
         TripRepository.find_ids_by_trip_number."""
         return await self._repo.find_ids_by_trip_number(tenant_id, f"%{q.strip()}%")
 
+    async def get_many_by_ids(
+        self, trip_ids: list[uuid.UUID], *, tenant_id: uuid.UUID
+    ) -> list[TripResponse]:
+        """Bulk trip lookup for other modules' detail views (e.g.
+        trip_catches' Fish Stock detail) - see TripRepository.get_many_by_ids."""
+        if not trip_ids:
+            return []
+        trips = await self._repo.get_many_by_ids(tenant_id, trip_ids)
+        return [self._to_response(trip) for trip in trips]
+
     async def _get_active_boat_or_raise(
         self, boat_id: uuid.UUID, tenant_id: uuid.UUID
     ) -> BoatResponse:

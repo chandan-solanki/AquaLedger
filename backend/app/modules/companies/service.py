@@ -74,6 +74,20 @@ class CompanyService:
         company = await self._get_or_raise(company_id, tenant_id)
         return self._to_response(company)
 
+    async def get_names_by_ids(
+        self, company_ids: list[uuid.UUID], *, tenant_id: uuid.UUID
+    ) -> dict[uuid.UUID, str]:
+        """Bulk `{id: name}` lookup for other modules' summary views (Sprint
+        15 Session 6: the invoice-conflict list's company names) - mirrors
+        FishService.get_many_by_ids's role for the Fish Stock rollup. A
+        company id absent from the result (deleted, or belonging to another
+        tenant) is simply missing from the dict; callers decide the
+        fallback, never this service."""
+        if not company_ids:
+            return {}
+        rows = await self._repo.get_names_by_ids(tenant_id, company_ids)
+        return {row.id: row.name for row in rows}
+
     async def list_companies(
         self, *, tenant_id: uuid.UUID, params: CompanyListParams
     ) -> PaginatedResponse[CompanyResponse]:

@@ -8,6 +8,18 @@ export { InvoiceItemForm, type InvoiceItemFormProps } from "@/features/invoices/
 export { InvoiceItemTable, type InvoiceItemTableProps } from "@/features/invoices/components/invoice-item-table";
 export { getInvoiceItemColumns } from "@/features/invoices/components/invoice-item-columns";
 export { useInvoiceItemRowActions } from "@/features/invoices/components/invoice-item-row-actions";
+export {
+  InvoiceIssueConflictDialog,
+  type InvoiceIssueConflictDialogProps,
+} from "@/features/invoices/components/invoice-issue-conflict-dialog";
+export {
+  TripCatchInvoiceUsageDialog,
+  type TripCatchInvoiceUsageDialogProps,
+} from "@/features/invoices/components/trip-catch-invoice-usage-dialog";
+export {
+  InvoiceIssuePreflightDialog,
+  type InvoiceIssuePreflightDialogProps,
+} from "@/features/invoices/components/invoice-issue-preflight-dialog";
 
 export { useInvoices } from "@/features/invoices/hooks/use-invoices";
 export { useInvoice } from "@/features/invoices/hooks/use-invoice";
@@ -34,6 +46,10 @@ export {
   useDeleteInvoiceItem,
   type DeleteInvoiceItemVariables,
 } from "@/features/invoices/hooks/use-delete-invoice-item";
+export { useTripCatchConflicts } from "@/features/invoices/hooks/use-trip-catch-conflicts";
+export { useTripCatchInvoiceUsageSummary } from "@/features/invoices/hooks/use-trip-catch-invoice-usage-summary";
+export { useInvoiceTripCatchConflicts } from "@/features/invoices/hooks/use-invoice-trip-catch-conflicts";
+export { useInvoiceIssuePreflight } from "@/features/invoices/hooks/use-invoice-issue-preflight";
 
 export { invoiceService } from "@/features/invoices/services/invoice-service";
 export type { InvoiceListResult } from "@/features/invoices/services/invoice-service";
@@ -96,3 +112,34 @@ export {
 } from "@/features/invoices/constants/invoice-status";
 
 export { invoiceItemKeys, invoiceKeys } from "@/features/invoices/constants/query-keys";
+
+export type {
+  BackendConflictingInvoice,
+  BackendTripCatchConflict,
+  ConflictingInvoice,
+  TripCatchConflict,
+} from "@/features/invoices/types/trip-catch-conflict";
+export { mapBackendTripCatchConflict } from "@/features/invoices/types/trip-catch-conflict";
+
+export type {
+  BackendTripCatchInvoiceUsage,
+  TripCatchInvoiceUsage,
+} from "@/features/invoices/types/trip-catch-invoice-usage";
+export { mapBackendTripCatchInvoiceUsage } from "@/features/invoices/types/trip-catch-invoice-usage";
+
+export type {
+  BackendTripCatchOtherInvoiceUsage,
+  TripCatchOtherInvoiceUsage,
+} from "@/features/invoices/types/trip-catch-other-invoice-usage";
+export { mapBackendTripCatchOtherInvoiceUsage } from "@/features/invoices/types/trip-catch-other-invoice-usage";
+
+export type {
+  BackendInvoiceIssuePreflightConflict,
+  BackendInvoiceIssuePreflightResponse,
+  InvoiceIssuePreflightConflict,
+  InvoiceIssuePreflightResponse,
+} from "@/features/invoices/types/invoice-issue-preflight";
+export {
+  mapBackendInvoiceIssuePreflightConflict,
+  mapBackendInvoiceIssuePreflightResponse,
+} from "@/features/invoices/types/invoice-issue-preflight";

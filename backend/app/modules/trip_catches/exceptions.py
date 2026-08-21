@@ -39,6 +39,20 @@ class TripCatchInsufficientQuantityError(BusinessRuleError):
     """Raised when a requested deduction (Sprint 9's invoice issue workflow,
     TripCatchService.deduct_available_quantity) exceeds available_quantity,
     checked under a `SELECT ... FOR UPDATE` lock so it can never allow
-    available_quantity to go negative under concurrency."""
+    available_quantity to go negative under concurrency.
+
+    Sprint 15 Session 6: always raised with `details = {trip_catch_id,
+    requested_quantity, available_quantity}` (all decimal-as-string, per
+    ARCHITECTURE.md §5.1) so a caller can surface the conflict without a
+    second lookup."""
 
     code = "TRIP_CATCH_INSUFFICIENT_QUANTITY"
+
+
+class FishStockFishNotFoundError(NotFoundError):
+    """Raised by GET /fish-stock/{fish_id} when fish_id doesn't reference an
+    existing, non-deleted fish for the caller's tenant - also covers a fish
+    belonging to another tenant, indistinguishable from "does not exist" by
+    design (Sprint 15 Session 2)."""
+
+    code = "FISH_STOCK_FISH_NOT_FOUND"

@@ -129,6 +129,221 @@ class InvoiceItemUpdateRequest(BaseModel):
     tax_rate: Decimal | None = Field(default=None, ge=0, le=100, max_digits=5, decimal_places=2)
 
 
+class TripCatchDraftDemandResponse(BaseModel):
+    """Sprint 15 Session 5: read-only, invoice-specific view of a trip
+    catch's competing draft demand - NOT a stock field, and never merged
+    into `TripCatchResponse`/`FishStockRow` (those stay Session 2/4's
+    Caught/Sold/Available/Waste only). `other_draft_quantity` is the sum of
+    `quantity` from every OTHER tenant's DRAFT, non-deleted invoice item
+    referencing this trip catch - the invoice passed as `exclude_invoice_id`
+    (if any) is never counted, whichever of its own items reference this
+    same catch. This number is informational only: it is never used to
+    reject a quantity server-side - the issue-time lock-protected check
+    against `TripCatch.available_quantity` remains the sole authority."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "trip_catch_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c04",
+                "other_draft_quantity": "40.000",
+            }
+        }
+    )
+
+    trip_catch_id: uuid.UUID
+    other_draft_quantity: Decimal
+
+
+class ConflictingInvoiceSummary(BaseModel):
+    """Sprint 15 Session 6: exactly what the conflict-resolution UI needs
+    about one OTHER invoice referencing the same trip catch - never the
+    full invoice (no totals, no remarks, no tenant_id)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "invoice_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c03",
+                "invoice_number": "INV/2026-27/00025",
+                "status": "issued",
+                "invoice_date": "2026-07-22",
+                "company_name": "ABC Traders",
+                "quantity": "60.000",
+            }
+        }
+    )
+
+    invoice_id: uuid.UUID
+    invoice_number: str | None
+    status: InvoiceStatus
+    invoice_date: date
+    company_name: str
+    quantity: Decimal
+
+
+class TripCatchConflictResponse(BaseModel):
+    """Sprint 15 Session 6: the full "why did issuing this fail" picture for
+    one trip catch - `required_quantity`/`shortfall_quantity` are null when
+    no specific attempted quantity is known (`required_quantity` wasn't
+    passed). This is informational only, resolved fresh at request time -
+    it never reserves or mutates stock, and the issue-time lock-protected
+    check in InvoiceService.issue remains the sole authority."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "trip_catch_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c04",
+                "required_quantity": "50.000",
+                "available_quantity": "40.000",
+                "shortfall_quantity": "10.000",
+                "conflicting_invoices": [
+                    {
+                        "invoice_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c03",
+                        "invoice_number": "INV/2026-27/00025",
+                        "status": "issued",
+                        "invoice_date": "2026-07-22",
+                        "company_name": "ABC Traders",
+                        "quantity": "60.000",
+                    }
+                ],
+            }
+        }
+    )
+
+    trip_catch_id: uuid.UUID
+    required_quantity: Decimal | None
+    available_quantity: Decimal
+    shortfall_quantity: Decimal | None
+    conflicting_invoices: list[ConflictingInvoiceSummary]
+
+
+class TripCatchInvoiceUsage(BaseModel):
+    """Sprint 15 Session 7: per-trip-catch invoice usage summary for the
+    Fish Stock detail page's Contributing Catches table - visibility only,
+    never a stock reservation (draft invoices never reduce
+    available_quantity; only issue() does that). `invoice_count` counts
+    distinct non-cancelled, non-deleted invoices referencing the catch.
+    `draft_quantity` is the quantity referenced by DRAFT invoices (demand
+    only); `consumed_quantity` is the quantity on ISSUED/PARTIALLY_PAID/PAID
+    invoices (already deducted from available_quantity, and should mirror
+    TripCatch.sold_quantity in the common case of one fish per catch)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "trip_catch_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c04",
+                "invoice_count": 2,
+                "draft_quantity": "30.000",
+                "consumed_quantity": "60.000",
+            }
+        }
+    )
+
+    trip_catch_id: uuid.UUID
+    invoice_count: int
+    draft_quantity: Decimal
+    consumed_quantity: Decimal
+
+
+class TripCatchOtherInvoiceUsage(BaseModel):
+    """Sprint 15 Session 8: for one trip catch THIS invoice's own items
+    reference, how much OTHER invoices (any invoice besides the one being
+    viewed) reference it - shown proactively on the Invoice Detail page's
+    item table, before any issue attempt. Deliberately a distinct schema
+    from `TripCatchInvoiceUsage` (Session 7) even though the underlying
+    query is shared: that one is an absolute count gated on `fish:view` with
+    no exclusion, this one is always relative to "other than the invoice I'm
+    looking at" and gated on `invoice:view`. `other_invoice_count`/
+    `other_draft_quantity`/`other_consumed_quantity` never include the
+    current invoice's own items, regardless of how many of its own items
+    reference this same trip catch."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "trip_catch_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c04",
+                "other_invoice_count": 2,
+                "other_draft_quantity": "20.000",
+                "other_consumed_quantity": "40.000",
+            }
+        }
+    )
+
+    trip_catch_id: uuid.UUID
+    other_invoice_count: int
+    other_draft_quantity: Decimal
+    other_consumed_quantity: Decimal
+
+
+class InvoiceIssuePreflightConflict(BaseModel):
+    """Sprint 15 Session 10: one trip catch this DRAFT invoice references
+    that, based on the current database state (read without any lock), no
+    longer has enough `available_quantity` to satisfy this invoice's own
+    requested quantity. `requested_quantity` is this invoice's own items'
+    quantity summed for this trip catch (an invoice with two items against
+    the same catch is counted once, aggregated). `other_draft_quantity` is
+    the same "other invoice usage" figure Sessions 7/8 already established -
+    additional context, not itself the cause of `is_sufficient`. This is
+    advisory only: the authoritative, lock-protected check remains
+    InvoiceService.issue's own call to
+    TripCatchService.deduct_available_quantity, re-read fresh at issue time
+    - a clean preflight (no conflicts) is never a guarantee that issuing
+    will actually succeed a moment later."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "trip_catch_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c04",
+                "requested_quantity": "30.000",
+                "available_quantity": "25.000",
+                "is_sufficient": False,
+                "shortfall_quantity": "5.000",
+                "other_draft_quantity": "10.000",
+            }
+        }
+    )
+
+    trip_catch_id: uuid.UUID
+    requested_quantity: Decimal
+    available_quantity: Decimal
+    is_sufficient: bool
+    shortfall_quantity: Decimal
+    other_draft_quantity: Decimal
+
+
+class InvoiceIssuePreflightResponse(BaseModel):
+    """Sprint 15 Session 10: "is this draft invoice likely issuable right
+    now" - one bounded read regardless of item count, never a per-item or
+    per-trip-catch request. `conflicts` lists only the trip catches that are
+    currently NOT sufficient (an empty list means `can_issue_now` is true) -
+    a sufficient catch never appears here, since the warning UI only ever
+    needs to render actual problems. Read-only and resolved fresh at request
+    time; never reserves or deducts stock, and never a substitute for the
+    issue-time authoritative validation."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "invoice_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c03",
+                "can_issue_now": False,
+                "conflicts": [
+                    {
+                        "trip_catch_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c04",
+                        "requested_quantity": "30.000",
+                        "available_quantity": "25.000",
+                        "is_sufficient": False,
+                        "shortfall_quantity": "5.000",
+                        "other_draft_quantity": "10.000",
+                    }
+                ],
+            }
+        }
+    )
+
+    invoice_id: uuid.UUID
+    can_issue_now: bool
+    conflicts: list[InvoiceIssuePreflightConflict]
+
+
 class InvoiceResponse(BaseModel):
     model_config = ConfigDict(
         from_attributes=True,

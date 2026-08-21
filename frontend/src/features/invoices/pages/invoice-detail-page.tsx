@@ -16,12 +16,18 @@ import { DetailPageTemplate } from "@/components/templates/detail-page-template"
 import { Badge } from "@/components/ui/badge";
 import type { PageAction } from "@/components/layout/page-actions";
 import { usePermissions } from "@/features/auth/hooks/use-permissions";
+import { useFishOptions } from "@/features/trips";
+import { InvoiceIssueConflictDialog } from "@/features/invoices/components/invoice-issue-conflict-dialog";
+import { InvoiceIssuePreflightDialog } from "@/features/invoices/components/invoice-issue-preflight-dialog";
 import { InvoiceItemTable } from "@/features/invoices/components/invoice-item-table";
 import { INVOICE_STATUS_BADGE_VARIANT, INVOICE_STATUS_LABELS } from "@/features/invoices/constants/invoice-status";
 import { useCompanyOptions } from "@/features/invoices/hooks/use-company-options";
 import { useDeleteInvoice } from "@/features/invoices/hooks/use-delete-invoice";
 import { useInvoice } from "@/features/invoices/hooks/use-invoice";
+import { useInvoiceIssuePreflight } from "@/features/invoices/hooks/use-invoice-issue-preflight";
+import { useInvoiceItems } from "@/features/invoices/hooks/use-invoice-items";
 import { useIssueInvoice } from "@/features/invoices/hooks/use-issue-invoice";
+import type { InvoiceIssuePreflightConflict } from "@/features/invoices/types/invoice-issue-preflight";
 import { triggerInvoiceDocumentDownload } from "@/features/invoices/utils/trigger-invoice-document-download";
 import { normalizeApiError } from "@/utils/api-error";
 import { formatCurrency } from "@/utils/format-currency";
@@ -64,11 +70,21 @@ export function InvoiceDetailPage() {
   const { hasPermission } = usePermissions();
   const [isIssueDialogOpen, setIsIssueDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [issueConflict, setIssueConflict] = useState<{ tripCatchId: string; requiredQuantity: string } | null>(
+    null
+  );
+  const [preflightConflicts, setPreflightConflicts] = useState<InvoiceIssuePreflightConflict[] | null>(
+    null
+  );
 
   const invoiceQuery = useInvoice(invoiceId);
   const companyOptions = useCompanyOptions();
   const issueInvoice = useIssueInvoice();
   const deleteInvoice = useDeleteInvoice();
+  const issuePreflight = useInvoiceIssuePreflight();
+  // Shares InvoiceItemTable's own query cache (same queryKey) - never a second network request.
+  const itemsQuery = useInvoiceItems(invoiceId);
+  const fishOptions = useFishOptions();
 
   if (!hasPermission("invoice:view")) {
     return (
@@ -83,6 +99,32 @@ export function InvoiceDetailPage() {
   const apiError = invoiceQuery.isError ? normalizeApiError(invoiceQuery.error) : null;
   const companyName = invoice ? (companyOptions.nameById.get(invoice.companyId) ?? "—") : undefined;
   const isDraft = invoice?.status === "draft";
+
+  /**
+   * Sprint 15 Session 10: runs one advisory preflight check before opening
+   * the existing Issue confirmation dialog. A clean result (or no
+   * conflicts) proceeds exactly as before Session 10; a conflicting result
+   * opens the new warning dialog first. A FAILED preflight request (network
+   * error, etc.) deliberately falls back to the existing confirmation flow
+   * rather than blocking the user - this is advisory visibility only, never
+   * an enforcement mechanism, so an unrelated hiccup fetching it must not
+   * prevent a legitimate issue attempt the backend would happily accept.
+   */
+  function handleIssueClick() {
+    if (!invoice) return;
+    issuePreflight.mutate(invoice.id, {
+      onSuccess: (result) => {
+        if (result.canIssueNow) {
+          setIsIssueDialogOpen(true);
+        } else {
+          setPreflightConflicts(result.conflicts);
+        }
+      },
+      onError: () => {
+        setIsIssueDialogOpen(true);
+      },
+    });
+  }
 
   const secondaryActions: PageAction[] = [];
   if (invoice && isDraft && hasPermission("invoice:edit")) {
@@ -106,7 +148,12 @@ export function InvoiceDetailPage() {
       }
       primaryAction={
         invoice && isDraft && hasPermission("invoice:issue")
-          ? { label: "Issue Invoice", icon: Send, onClick: () => setIsIssueDialogOpen(true) }
+          ? {
+              label: "Issue Invoice",
+              icon: Send,
+              onClick: handleIssueClick,
+              loading: issuePreflight.isPending,
+            }
           : undefined
       }
       secondaryActions={secondaryActions.length > 0 ? secondaryActions : undefined}
@@ -192,9 +239,51 @@ export function InvoiceDetailPage() {
             confirmLabel="Issue Invoice"
             isLoading={issueInvoice.isPending}
             onConfirm={() =>
-              issueInvoice.mutate(invoice.id, { onSuccess: () => setIsIssueDialogOpen(false) })
+              issueInvoice.mutate(invoice.id, {
+                onSuccess: () => setIsIssueDialogOpen(false),
+                onError: (error) => {
+                  const apiError = normalizeApiError(error);
+                  const details = apiError.details as
+                    | { trip_catch_id?: string; requested_quantity?: string }
+                    | null
+                    | undefined;
+                  if (apiError.code === "INVOICE_INSUFFICIENT_INVENTORY" && details?.trip_catch_id) {
+                    setIsIssueDialogOpen(false);
+                    setIssueConflict({
+                      tripCatchId: details.trip_catch_id,
+                      requiredQuantity: details.requested_quantity ?? "",
+                    });
+                  }
+                  // Any other failure (or a malformed/missing details payload) is already
+                  // toasted generically by useIssueInvoice's own onError.
+                },
+              })
             }
           />
+
+          {issueConflict && (
+            <InvoiceIssueConflictDialog
+              open={Boolean(issueConflict)}
+              onOpenChange={(open) => !open && setIssueConflict(null)}
+              currentInvoiceId={invoice.id}
+              tripCatchId={issueConflict.tripCatchId}
+              requiredQuantity={issueConflict.requiredQuantity}
+            />
+          )}
+
+          {preflightConflicts && (
+            <InvoiceIssuePreflightDialog
+              open={Boolean(preflightConflicts)}
+              onOpenChange={(open) => !open && setPreflightConflicts(null)}
+              conflicts={preflightConflicts}
+              items={itemsQuery.data ?? []}
+              fishById={fishOptions.fishById}
+              onContinueAnyway={() => {
+                setPreflightConflicts(null);
+                setIsIssueDialogOpen(true);
+              }}
+            />
+          )}
 
           <DeleteConfirmationDialog
             open={isDeleteDialogOpen}

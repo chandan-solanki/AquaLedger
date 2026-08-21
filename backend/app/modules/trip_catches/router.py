@@ -7,6 +7,7 @@ from app.common.schemas import ErrorResponse, PaginatedResponse
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.auth.permissions import require_permission
+from app.modules.fish.permissions import FISH_VIEW
 from app.modules.trip_catches.dependencies import get_trip_catch_service
 from app.modules.trip_catches.permissions import (
     TRIP_CATCH_CREATE,
@@ -15,6 +16,9 @@ from app.modules.trip_catches.permissions import (
     TRIP_CATCH_VIEW,
 )
 from app.modules.trip_catches.schemas import (
+    FishStockDetail,
+    FishStockListParams,
+    FishStockRow,
     TripCatchCreateRequest,
     TripCatchListParams,
     TripCatchResponse,
@@ -23,6 +27,13 @@ from app.modules.trip_catches.schemas import (
 from app.modules.trip_catches.service import TripCatchService
 
 router = APIRouter(prefix="/trip-catches", tags=["trip-catches"])
+
+# Fish Stock (Sprint 15 Session 2) is a read-only aggregation derived
+# entirely from TripCatch, so its logic lives in this module's service/
+# repository rather than a new module (see Session 1 audit) - but it's a
+# distinct resource path (/fish-stock, not /trip-catches/...), so it gets
+# its own router instance registered separately in app.api.v1.router.
+fish_stock_router = APIRouter(prefix="/fish-stock", tags=["fish-stock"])
 
 
 def _error_example(code: str, message: str) -> dict[str, object]:
@@ -275,3 +286,93 @@ async def delete_trip_catch(
     service: TripCatchService = Depends(get_trip_catch_service),
 ) -> None:
     await service.delete(trip_catch_id, tenant_id=current_user.tenant_id, actor_id=current_user.id)
+
+
+_FISH_STOCK_ROW_EXAMPLE: dict[str, object] = {
+    "fish_id": "019f83c8-6489-7bcf-beba-c241b7abbb03",
+    "fish_name": "Pomfret",
+    "unit": "kg",
+    "total_caught": "180.000",
+    "total_sold": "60.000",
+    "total_available": "120.000",
+    "total_waste": "0.000",
+}
+
+_FISH_STOCK_LIST_RESPONSE_EXAMPLE: dict[str, object] = {
+    "data": [_FISH_STOCK_ROW_EXAMPLE],
+    "meta": {
+        "total_records": 1,
+        "total_pages": 1,
+        "current_page": 1,
+        "page_size": 20,
+        "has_next": False,
+        "has_previous": False,
+    },
+}
+
+_FISH_STOCK_NOT_FOUND_RESPONSE: dict[int | str, dict[str, object]] = {
+    404: {
+        "model": ErrorResponse,
+        "description": "Fish not found",
+        "content": {
+            "application/json": {
+                "example": _error_example("FISH_STOCK_FISH_NOT_FOUND", "Fish not found")
+            }
+        },
+    },
+}
+
+
+@fish_stock_router.get(
+    "",
+    response_model=PaginatedResponse[FishStockRow],
+    summary="Fish stock aggregated from trip catches",
+    description=(
+        "One row per fish with at least one non-deleted trip catch for the caller's "
+        "tenant, summing TripCatch.quantity_caught/sold_quantity/available_quantity/"
+        "waste_quantity into total_caught/total_sold/total_available/total_waste. "
+        "Quantities are denominated in the fish's own unit (Fish.unit) - no cross-unit "
+        "conversion is performed. `q` searches the fish's code and name "
+        "(case-insensitive); `is_active` filters by the fish master's active flag. "
+        "sold_quantity/available_quantity reflect the running balance InvoiceService."
+        "issue() already maintains - this endpoint only reads it, it never mutates stock."
+    ),
+    responses={
+        **_COMMON_ERROR_RESPONSES,
+        200: {"content": {"application/json": {"example": _FISH_STOCK_LIST_RESPONSE_EXAMPLE}}},
+        422: {"model": ErrorResponse, "description": "page/page_size out of range"},
+    },
+    dependencies=[Depends(require_permission(FISH_VIEW))],
+)
+async def list_fish_stock(
+    params: Annotated[FishStockListParams, Query()],
+    current_user: User = Depends(get_current_user),
+    service: TripCatchService = Depends(get_trip_catch_service),
+) -> PaginatedResponse[FishStockRow]:
+    return await service.get_fish_stock_list(tenant_id=current_user.tenant_id, params=params)
+
+
+@fish_stock_router.get(
+    "/{fish_id}",
+    response_model=FishStockDetail,
+    summary="Fish stock detail with contributing trip catches",
+    description=(
+        "One fish's totals plus every non-deleted trip catch contributing to them, "
+        "most recently landed first. 404 for a fish that doesn't exist, is soft-deleted, "
+        "or belongs to another tenant - the response never distinguishes those cases."
+    ),
+    responses={
+        **_COMMON_ERROR_RESPONSES,
+        **_FISH_STOCK_NOT_FOUND_RESPONSE,
+        200: {
+            "content": {"application/json": {"example": {**_FISH_STOCK_ROW_EXAMPLE, "catches": []}}}
+        },
+    },
+    dependencies=[Depends(require_permission(FISH_VIEW))],
+)
+async def get_fish_stock_detail(
+    fish_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: TripCatchService = Depends(get_trip_catch_service),
+) -> FishStockDetail:
+    return await service.get_fish_stock_detail(fish_id, tenant_id=current_user.tenant_id)

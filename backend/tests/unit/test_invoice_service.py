@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -26,7 +27,7 @@ from app.modules.invoices.exceptions import (
     InvoiceReconciliationError,
 )
 from app.modules.invoices.models import Invoice, InvoiceItem, InvoiceSequence
-from app.modules.invoices.schemas import InvoiceListParams
+from app.modules.invoices.schemas import InvoiceListParams, TripCatchDraftDemandResponse
 from app.modules.invoices.service import InvoiceService
 from app.modules.trip_catches.exceptions import (
     TripCatchInsufficientQuantityError,
@@ -82,6 +83,9 @@ class _FakeCompanyService:
         self.find_ids_calls: list[tuple[uuid.UUID, str]] = []
         self.find_ids_result: list[uuid.UUID] = []
         self.recalculate_outstanding_calls: list[tuple[uuid.UUID, uuid.UUID, Decimal]] = []
+        # For get_trip_catch_conflicts (Sprint 15 Session 6).
+        self.names_by_id: dict[uuid.UUID, str] = {}
+        self.get_names_by_ids_calls: list[tuple[list[uuid.UUID], uuid.UUID]] = []
 
     async def get(self, company_id: uuid.UUID, *, tenant_id: uuid.UUID) -> _CompanyStub:
         self.get_calls.append((company_id, tenant_id))
@@ -109,6 +113,12 @@ class _FakeCompanyService:
     ) -> None:
         self.recalculate_outstanding_calls.append((company_id, tenant_id, total_open_balance))
 
+    async def get_names_by_ids(
+        self, company_ids: list[uuid.UUID], *, tenant_id: uuid.UUID
+    ) -> dict[uuid.UUID, str]:
+        self.get_names_by_ids_calls.append((company_ids, tenant_id))
+        return {cid: name for cid, name in self.names_by_id.items() if cid in company_ids}
+
 
 class _TripCatchStub:
     """Stands in for a TripCatchResponse - only .fish_id/.available_quantity
@@ -135,6 +145,9 @@ class _FakeTripCatchService:
         self.trip_catch = trip_catch
         self.raises = raises
         self.get_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
+        # For get_issue_preflight (Sprint 15 Session 10).
+        self.many_by_id: dict[uuid.UUID, _TripCatchStub] = {}
+        self.get_many_by_ids_calls: list[tuple[list[uuid.UUID], uuid.UUID]] = []
 
     async def get(self, trip_catch_id: uuid.UUID, *, tenant_id: uuid.UUID) -> _TripCatchStub:
         self.get_calls.append((trip_catch_id, tenant_id))
@@ -142,6 +155,12 @@ class _FakeTripCatchService:
             raise TripCatchNotFoundError("Trip catch not found")
         assert self.trip_catch is not None
         return self.trip_catch
+
+    async def get_many_by_ids(
+        self, trip_catch_ids: list[uuid.UUID], *, tenant_id: uuid.UUID
+    ) -> list[_TripCatchStub]:
+        self.get_many_by_ids_calls.append((trip_catch_ids, tenant_id))
+        return [self.many_by_id[tc_id] for tc_id in trip_catch_ids if tc_id in self.many_by_id]
 
 
 class _FakeIssueTripCatchService:
@@ -204,6 +223,17 @@ class _FakeInvoiceRepo:
         self.by_id: dict[uuid.UUID, Invoice] = {}
         self.open_balance_by_company: dict[uuid.UUID, Decimal] = {}
         self.sum_open_balance_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
+        # For get_trip_catch_draft_demand (Sprint 15 Session 5).
+        self.other_draft_quantity: Decimal = Decimal("0")
+        self.sum_other_draft_quantity_calls: list[
+            tuple[uuid.UUID, uuid.UUID, uuid.UUID | None]
+        ] = []
+        # For get_trip_catch_conflicts (Sprint 15 Session 6).
+        self.conflicting_rows: list[Any] = []
+        self.list_conflicts_calls: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID | None]] = []
+        # For get_trip_catch_invoice_usage (Sprint 15 Session 7/8).
+        self.usage_rows: list[Any] = []
+        self.usage_calls: list[tuple[list[uuid.UUID], uuid.UUID, uuid.UUID | None]] = []
 
     async def search(self, tenant_id: uuid.UUID, **kwargs: Any) -> tuple[list[Invoice], int]:
         self.last_search_call = {"tenant_id": tenant_id, **kwargs}
@@ -243,6 +273,36 @@ class _FakeInvoiceRepo:
         self, tenant_id: uuid.UUID, prefix: str, fiscal_year: str
     ) -> InvoiceSequence:
         return self.sequences[(tenant_id, prefix, fiscal_year)]
+
+    async def sum_other_draft_quantity(
+        self,
+        trip_catch_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        *,
+        exclude_invoice_id: uuid.UUID | None,
+    ) -> Decimal:
+        self.sum_other_draft_quantity_calls.append((trip_catch_id, tenant_id, exclude_invoice_id))
+        return self.other_draft_quantity
+
+    async def list_invoices_referencing_trip_catch(
+        self,
+        trip_catch_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        *,
+        exclude_invoice_id: uuid.UUID | None,
+    ) -> list[Any]:
+        self.list_conflicts_calls.append((trip_catch_id, tenant_id, exclude_invoice_id))
+        return self.conflicting_rows
+
+    async def get_trip_catch_invoice_usage(
+        self,
+        trip_catch_ids: list[uuid.UUID],
+        tenant_id: uuid.UUID,
+        *,
+        exclude_invoice_id: uuid.UUID | None = None,
+    ) -> list[Any]:
+        self.usage_calls.append((trip_catch_ids, tenant_id, exclude_invoice_id))
+        return self.usage_rows
 
 
 def _make_invoice(**overrides: Any) -> Invoice:
@@ -373,6 +433,40 @@ def _service_with_item_fakes(
     service._trip_catch_service = fake_trip_catch_service  # type: ignore[assignment]
     service._fish_service = fake_fish_service  # type: ignore[assignment]
     return service, fake_trip_catch_service, fake_fish_service
+
+
+def _service_with_draft_demand_fakes(
+    *,
+    trip_catch: _TripCatchStub | None = None,
+    trip_catch_raises: bool = False,
+    other_draft_quantity: Decimal = Decimal("0"),
+) -> tuple[InvoiceService, _FakeInvoiceRepo, _FakeTripCatchService]:
+    service = InvoiceService.__new__(InvoiceService)
+    fake_repo = _FakeInvoiceRepo()
+    fake_repo.other_draft_quantity = other_draft_quantity
+    fake_trip_catch_service = _FakeTripCatchService(trip_catch=trip_catch, raises=trip_catch_raises)
+    service._repo = fake_repo  # type: ignore[assignment]
+    service._trip_catch_service = fake_trip_catch_service  # type: ignore[assignment]
+    return service, fake_repo, fake_trip_catch_service
+
+
+def _service_with_conflict_fakes(
+    *,
+    trip_catch: _TripCatchStub | None = None,
+    trip_catch_raises: bool = False,
+    conflicting_rows: list[Any] | None = None,
+    names_by_id: dict[uuid.UUID, str] | None = None,
+) -> tuple[InvoiceService, _FakeInvoiceRepo, _FakeTripCatchService, _FakeCompanyService]:
+    service = InvoiceService.__new__(InvoiceService)
+    fake_repo = _FakeInvoiceRepo()
+    fake_repo.conflicting_rows = conflicting_rows or []
+    fake_trip_catch_service = _FakeTripCatchService(trip_catch=trip_catch, raises=trip_catch_raises)
+    fake_company_service = _FakeCompanyService()
+    fake_company_service.names_by_id = names_by_id or {}
+    service._repo = fake_repo  # type: ignore[assignment]
+    service._trip_catch_service = fake_trip_catch_service  # type: ignore[assignment]
+    service._company_service = fake_company_service  # type: ignore[assignment]
+    return service, fake_repo, fake_trip_catch_service, fake_company_service
 
 
 class TestEnsureCompanyActive:
@@ -624,6 +718,769 @@ class TestEnsureTripCatchAndFishValid:
             )
 
 
+class TestGetTripCatchDraftDemand:
+    """InvoiceService.get_trip_catch_draft_demand - Sprint 15 Session 5. The
+    aggregation logic itself is integration-tested (TestSumOtherDraftQuantity
+    in test_invoice_repository.py); this class covers what the service adds
+    on top: trip-catch existence/tenant validation, error translation, and
+    correct forwarding of exclude_invoice_id."""
+
+    async def test_returns_the_repository_sum_as_is(self) -> None:
+        trip_catch = _TripCatchStub()
+        service, fake_repo, _ = _service_with_draft_demand_fakes(
+            trip_catch=trip_catch, other_draft_quantity=Decimal("40.000")
+        )
+
+        result = await service.get_trip_catch_draft_demand(
+            trip_catch.id, tenant_id=uuid.uuid4(), exclude_invoice_id=None
+        )
+
+        assert isinstance(result, TripCatchDraftDemandResponse)
+        assert result.trip_catch_id == trip_catch.id
+        assert result.other_draft_quantity == Decimal("40.000")
+
+    async def test_raises_trip_catch_not_found_when_trip_catch_missing(self) -> None:
+        service, _, _ = _service_with_draft_demand_fakes(trip_catch_raises=True)
+
+        with pytest.raises(InvoiceItemTripCatchNotFoundError):
+            await service.get_trip_catch_draft_demand(
+                uuid.uuid4(), tenant_id=uuid.uuid4(), exclude_invoice_id=None
+            )
+
+    async def test_never_queries_the_aggregate_when_trip_catch_is_missing(self) -> None:
+        """A 404 short-circuits before the (more expensive) aggregate query
+        runs at all."""
+        service, fake_repo, _ = _service_with_draft_demand_fakes(trip_catch_raises=True)
+
+        with pytest.raises(InvoiceItemTripCatchNotFoundError):
+            await service.get_trip_catch_draft_demand(
+                uuid.uuid4(), tenant_id=uuid.uuid4(), exclude_invoice_id=None
+            )
+
+        assert fake_repo.sum_other_draft_quantity_calls == []
+
+    async def test_forwards_tenant_id_and_exclude_invoice_id(self) -> None:
+        trip_catch = _TripCatchStub()
+        service, fake_repo, fake_trip_catch_service = _service_with_draft_demand_fakes(
+            trip_catch=trip_catch
+        )
+        tenant_id = uuid.uuid4()
+        exclude_invoice_id = uuid.uuid4()
+
+        await service.get_trip_catch_draft_demand(
+            trip_catch.id, tenant_id=tenant_id, exclude_invoice_id=exclude_invoice_id
+        )
+
+        assert fake_trip_catch_service.get_calls == [(trip_catch.id, tenant_id)]
+        assert fake_repo.sum_other_draft_quantity_calls == [
+            (trip_catch.id, tenant_id, exclude_invoice_id)
+        ]
+
+    async def test_exclude_invoice_id_is_optional(self) -> None:
+        trip_catch = _TripCatchStub()
+        service, fake_repo, _ = _service_with_draft_demand_fakes(trip_catch=trip_catch)
+        tenant_id = uuid.uuid4()
+
+        await service.get_trip_catch_draft_demand(
+            trip_catch.id, tenant_id=tenant_id, exclude_invoice_id=None
+        )
+
+        assert fake_repo.sum_other_draft_quantity_calls == [(trip_catch.id, tenant_id, None)]
+
+    async def test_zero_other_draft_quantity_is_returned_as_is(self) -> None:
+        trip_catch = _TripCatchStub()
+        service, _, _ = _service_with_draft_demand_fakes(
+            trip_catch=trip_catch, other_draft_quantity=Decimal("0")
+        )
+
+        result = await service.get_trip_catch_draft_demand(
+            trip_catch.id, tenant_id=uuid.uuid4(), exclude_invoice_id=None
+        )
+
+        assert result.other_draft_quantity == Decimal("0")
+
+
+def _conflict_row(
+    *,
+    invoice_id: uuid.UUID | None = None,
+    invoice_number: str | None = None,
+    status: InvoiceStatus = InvoiceStatus.DRAFT,
+    invoice_date: date = date(2026, 7, 22),
+    company_id: uuid.UUID | None = None,
+    quantity: Decimal = Decimal("10.000"),
+) -> SimpleNamespace:
+    """Stands in for one Row from InvoiceRepository.list_invoices_referencing_trip_catch -
+    only attribute access is used by the service, never row-tuple unpacking."""
+    return SimpleNamespace(
+        id=invoice_id or uuid.uuid4(),
+        invoice_number=invoice_number,
+        status=status,
+        invoice_date=invoice_date,
+        company_id=company_id or uuid.uuid4(),
+        quantity=quantity,
+    )
+
+
+class TestGetTripCatchConflicts:
+    """InvoiceService.get_trip_catch_conflicts - Sprint 15 Session 6. The
+    aggregation/filtering logic itself is integration-tested
+    (TestListInvoicesReferencingTripCatch); this covers what the service
+    adds: trip-catch validation, shortfall math, and bulk company-name
+    resolution."""
+
+    async def test_returns_conflicts_with_resolved_company_names(self) -> None:
+        trip_catch = _TripCatchStub(available_quantity=Decimal("40.000"))
+        company_id = uuid.uuid4()
+        row = _conflict_row(company_id=company_id, quantity=Decimal("30.000"))
+        service, _, _, fake_company_service = _service_with_conflict_fakes(
+            trip_catch=trip_catch,
+            conflicting_rows=[row],
+            names_by_id={company_id: "ABC Traders"},
+        )
+
+        result = await service.get_trip_catch_conflicts(
+            trip_catch.id, tenant_id=uuid.uuid4(), exclude_invoice_id=None, required_quantity=None
+        )
+
+        assert len(result.conflicting_invoices) == 1
+        assert result.conflicting_invoices[0].company_name == "ABC Traders"
+        assert result.conflicting_invoices[0].quantity == Decimal("30.000")
+        assert fake_company_service.get_names_by_ids_calls  # resolved in bulk, not per-row
+
+    async def test_unresolvable_company_name_falls_back_without_raising(self) -> None:
+        trip_catch = _TripCatchStub()
+        row = _conflict_row(quantity=Decimal("5.000"))
+        service, _, _, _ = _service_with_conflict_fakes(
+            trip_catch=trip_catch, conflicting_rows=[row], names_by_id={}
+        )
+
+        result = await service.get_trip_catch_conflicts(
+            trip_catch.id, tenant_id=uuid.uuid4(), exclude_invoice_id=None, required_quantity=None
+        )
+
+        assert result.conflicting_invoices[0].company_name == "Unknown Company"
+
+    async def test_computes_shortfall_when_required_quantity_given(self) -> None:
+        trip_catch = _TripCatchStub(available_quantity=Decimal("40.000"))
+        service, _, _, _ = _service_with_conflict_fakes(trip_catch=trip_catch)
+
+        result = await service.get_trip_catch_conflicts(
+            trip_catch.id,
+            tenant_id=uuid.uuid4(),
+            exclude_invoice_id=None,
+            required_quantity=Decimal("50.000"),
+        )
+
+        assert result.available_quantity == Decimal("40.000")
+        assert result.required_quantity == Decimal("50.000")
+        assert result.shortfall_quantity == Decimal("10.000")
+
+    async def test_shortfall_never_negative_when_enough_is_available(self) -> None:
+        """required_quantity may legitimately be <= available (e.g. the UI
+        re-checks after someone else's draft was deleted) - shortfall must
+        floor at zero, never go negative."""
+        trip_catch = _TripCatchStub(available_quantity=Decimal("100.000"))
+        service, _, _, _ = _service_with_conflict_fakes(trip_catch=trip_catch)
+
+        result = await service.get_trip_catch_conflicts(
+            trip_catch.id,
+            tenant_id=uuid.uuid4(),
+            exclude_invoice_id=None,
+            required_quantity=Decimal("40.000"),
+        )
+
+        assert result.shortfall_quantity == Decimal("0")
+
+    async def test_shortfall_is_none_when_required_quantity_not_given(self) -> None:
+        trip_catch = _TripCatchStub()
+        service, _, _, _ = _service_with_conflict_fakes(trip_catch=trip_catch)
+
+        result = await service.get_trip_catch_conflicts(
+            trip_catch.id, tenant_id=uuid.uuid4(), exclude_invoice_id=None, required_quantity=None
+        )
+
+        assert result.required_quantity is None
+        assert result.shortfall_quantity is None
+
+    async def test_raises_trip_catch_not_found_when_trip_catch_missing(self) -> None:
+        service, _, _, _ = _service_with_conflict_fakes(trip_catch_raises=True)
+
+        with pytest.raises(InvoiceItemTripCatchNotFoundError):
+            await service.get_trip_catch_conflicts(
+                uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                exclude_invoice_id=None,
+                required_quantity=None,
+            )
+
+    async def test_never_queries_conflicts_when_trip_catch_is_missing(self) -> None:
+        service, fake_repo, _, fake_company_service = _service_with_conflict_fakes(
+            trip_catch_raises=True
+        )
+
+        with pytest.raises(InvoiceItemTripCatchNotFoundError):
+            await service.get_trip_catch_conflicts(
+                uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                exclude_invoice_id=None,
+                required_quantity=None,
+            )
+
+        assert fake_repo.list_conflicts_calls == []
+        assert fake_company_service.get_names_by_ids_calls == []
+
+    async def test_forwards_tenant_id_and_exclude_invoice_id(self) -> None:
+        trip_catch = _TripCatchStub()
+        service, fake_repo, fake_trip_catch_service, _ = _service_with_conflict_fakes(
+            trip_catch=trip_catch
+        )
+        tenant_id = uuid.uuid4()
+        exclude_invoice_id = uuid.uuid4()
+
+        await service.get_trip_catch_conflicts(
+            trip_catch.id,
+            tenant_id=tenant_id,
+            exclude_invoice_id=exclude_invoice_id,
+            required_quantity=None,
+        )
+
+        assert fake_trip_catch_service.get_calls == [(trip_catch.id, tenant_id)]
+        assert fake_repo.list_conflicts_calls == [(trip_catch.id, tenant_id, exclude_invoice_id)]
+
+    async def test_no_conflicts_returns_empty_list(self) -> None:
+        trip_catch = _TripCatchStub()
+        service, _, _, _ = _service_with_conflict_fakes(trip_catch=trip_catch, conflicting_rows=[])
+
+        result = await service.get_trip_catch_conflicts(
+            trip_catch.id, tenant_id=uuid.uuid4(), exclude_invoice_id=None, required_quantity=None
+        )
+
+        assert result.conflicting_invoices == []
+
+    async def test_multiple_conflicts_each_keep_their_own_company_name(self) -> None:
+        trip_catch = _TripCatchStub()
+        company_a, company_b = uuid.uuid4(), uuid.uuid4()
+        rows = [
+            _conflict_row(company_id=company_a, quantity=Decimal("20.000")),
+            _conflict_row(company_id=company_b, quantity=Decimal("30.000")),
+        ]
+        service, _, _, _ = _service_with_conflict_fakes(
+            trip_catch=trip_catch,
+            conflicting_rows=rows,
+            names_by_id={company_a: "Alpha Traders", company_b: "Beta Traders"},
+        )
+
+        result = await service.get_trip_catch_conflicts(
+            trip_catch.id, tenant_id=uuid.uuid4(), exclude_invoice_id=None, required_quantity=None
+        )
+
+        names = {c.company_name for c in result.conflicting_invoices}
+        assert names == {"Alpha Traders", "Beta Traders"}
+
+
+def _usage_row(
+    *,
+    trip_catch_id: uuid.UUID | None = None,
+    invoice_count: int = 1,
+    draft_quantity: Decimal = Decimal("0"),
+    consumed_quantity: Decimal = Decimal("0"),
+) -> SimpleNamespace:
+    """Stands in for one Row from InvoiceRepository.get_trip_catch_invoice_usage -
+    only attribute access is used by the service, never row-tuple unpacking."""
+    return SimpleNamespace(
+        trip_catch_id=trip_catch_id or uuid.uuid4(),
+        invoice_count=invoice_count,
+        draft_quantity=draft_quantity,
+        consumed_quantity=consumed_quantity,
+    )
+
+
+def _service_with_usage_fakes(
+    *, usage_rows: list[Any] | None = None
+) -> tuple[InvoiceService, _FakeInvoiceRepo]:
+    service = InvoiceService.__new__(InvoiceService)
+    fake_repo = _FakeInvoiceRepo()
+    fake_repo.usage_rows = usage_rows or []
+    service._repo = fake_repo  # type: ignore[assignment]
+    return service, fake_repo
+
+
+class TestGetTripCatchInvoiceUsage:
+    """InvoiceService.get_trip_catch_invoice_usage - Sprint 15 Session 7.
+    The aggregation/filtering logic itself is integration-tested
+    (TestGetTripCatchInvoiceUsage in test_invoice_repository.py); this
+    covers what the service adds: the empty-input short-circuit and
+    row-to-response mapping."""
+
+    async def test_empty_ids_returns_empty_list_without_querying(self) -> None:
+        service, fake_repo = _service_with_usage_fakes()
+
+        result = await service.get_trip_catch_invoice_usage([], tenant_id=uuid.uuid4())
+
+        assert result == []
+        assert fake_repo.usage_calls == []
+
+    async def test_maps_row_to_response(self) -> None:
+        trip_catch_id = uuid.uuid4()
+        row = _usage_row(
+            trip_catch_id=trip_catch_id,
+            invoice_count=2,
+            draft_quantity=Decimal("30.000"),
+            consumed_quantity=Decimal("60.000"),
+        )
+        service, _ = _service_with_usage_fakes(usage_rows=[row])
+
+        result = await service.get_trip_catch_invoice_usage([trip_catch_id], tenant_id=uuid.uuid4())
+
+        assert len(result) == 1
+        assert result[0].trip_catch_id == trip_catch_id
+        assert result[0].invoice_count == 2
+        assert result[0].draft_quantity == Decimal("30.000")
+        assert result[0].consumed_quantity == Decimal("60.000")
+
+    async def test_multiple_rows_mapped_independently(self) -> None:
+        catch_a, catch_b = uuid.uuid4(), uuid.uuid4()
+        rows = [
+            _usage_row(trip_catch_id=catch_a, invoice_count=1, draft_quantity=Decimal("10.000")),
+            _usage_row(trip_catch_id=catch_b, invoice_count=3, consumed_quantity=Decimal("40.000")),
+        ]
+        service, _ = _service_with_usage_fakes(usage_rows=rows)
+
+        result = await service.get_trip_catch_invoice_usage(
+            [catch_a, catch_b], tenant_id=uuid.uuid4()
+        )
+
+        by_id = {r.trip_catch_id: r for r in result}
+        assert by_id[catch_a].invoice_count == 1
+        assert by_id[catch_a].draft_quantity == Decimal("10.000")
+        assert by_id[catch_b].invoice_count == 3
+        assert by_id[catch_b].consumed_quantity == Decimal("40.000")
+
+    async def test_a_trip_catch_absent_from_repo_result_is_absent_from_response(self) -> None:
+        """A trip catch with no qualifying invoice never gets a synthesized
+        zero-row - it's simply absent, matching the repository's own
+        contract (missing means zero usage)."""
+        requested = [uuid.uuid4(), uuid.uuid4()]
+        row = _usage_row(trip_catch_id=requested[0], invoice_count=1)
+        service, _ = _service_with_usage_fakes(usage_rows=[row])
+
+        result = await service.get_trip_catch_invoice_usage(requested, tenant_id=uuid.uuid4())
+
+        assert len(result) == 1
+        assert result[0].trip_catch_id == requested[0]
+
+    async def test_forwards_ids_and_tenant_to_repository(self) -> None:
+        service, fake_repo = _service_with_usage_fakes()
+        ids = [uuid.uuid4(), uuid.uuid4()]
+        tenant_id = uuid.uuid4()
+
+        await service.get_trip_catch_invoice_usage(ids, tenant_id=tenant_id)
+
+        assert fake_repo.usage_calls == [(ids, tenant_id, None)]
+
+    async def test_no_rows_returns_empty_list(self) -> None:
+        service, _ = _service_with_usage_fakes(usage_rows=[])
+
+        result = await service.get_trip_catch_invoice_usage([uuid.uuid4()], tenant_id=uuid.uuid4())
+
+        assert result == []
+
+
+def _conflicts_service_with_fakes(
+    *,
+    invoice: Invoice | None = None,
+    items: list[InvoiceItem] | None = None,
+    usage_rows: list[Any] | None = None,
+) -> tuple[InvoiceService, _FakeInvoiceRepo]:
+    service = InvoiceService.__new__(InvoiceService)
+    fake_repo = _FakeInvoiceRepo()
+    if invoice is not None:
+        fake_repo.by_id[invoice.id] = invoice
+        fake_repo.items_by_invoice[invoice.id] = items or []
+    fake_repo.usage_rows = usage_rows or []
+    service._repo = fake_repo  # type: ignore[assignment]
+    return service, fake_repo
+
+
+class TestGetInvoiceTripCatchConflicts:
+    """InvoiceService.get_invoice_trip_catch_conflicts - Sprint 15 Session 8.
+    The aggregation/filtering/exclusion logic itself is integration-tested
+    (test_invoice_repository.py's TestGetTripCatchInvoiceUsage exclude_invoice_id
+    coverage, and test_invoice_api.py's TestGetInvoiceTripCatchConflicts); this
+    covers what the service adds on top: invoice existence/tenant scoping via
+    _get_or_raise, collecting distinct trip_catch_ids from this invoice's own
+    items (in order of first appearance), forwarding exclude_invoice_id=invoice_id,
+    and zero-filling a trip catch absent from the repository's result."""
+
+    async def test_raises_not_found_when_invoice_missing(self) -> None:
+        service, _ = _conflicts_service_with_fakes()
+
+        with pytest.raises(InvoiceNotFoundError):
+            await service.get_invoice_trip_catch_conflicts(uuid.uuid4(), tenant_id=uuid.uuid4())
+
+    async def test_returns_empty_list_when_invoice_has_no_items(self) -> None:
+        invoice = _make_invoice()
+        service, fake_repo = _conflicts_service_with_fakes(invoice=invoice, items=[])
+
+        result = await service.get_invoice_trip_catch_conflicts(
+            invoice.id, tenant_id=invoice.tenant_id
+        )
+
+        assert result == []
+        assert fake_repo.usage_calls == []
+
+    async def test_returns_empty_list_when_no_item_has_a_trip_catch_id(self) -> None:
+        invoice = _make_invoice()
+        item = _make_invoice_item(
+            invoice_id=invoice.id, tenant_id=invoice.tenant_id, trip_catch_id=None
+        )
+        service, fake_repo = _conflicts_service_with_fakes(invoice=invoice, items=[item])
+
+        result = await service.get_invoice_trip_catch_conflicts(
+            invoice.id, tenant_id=invoice.tenant_id
+        )
+
+        assert result == []
+        assert fake_repo.usage_calls == []
+
+    async def test_forwards_the_current_invoice_id_as_exclude_invoice_id(self) -> None:
+        invoice = _make_invoice()
+        item = _make_invoice_item(invoice_id=invoice.id, tenant_id=invoice.tenant_id)
+        service, fake_repo = _conflicts_service_with_fakes(invoice=invoice, items=[item])
+
+        await service.get_invoice_trip_catch_conflicts(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert fake_repo.usage_calls == [([item.trip_catch_id], invoice.tenant_id, invoice.id)]
+
+    async def test_deduplicates_trip_catch_ids_across_multiple_items(self) -> None:
+        invoice = _make_invoice()
+        shared_catch = uuid.uuid4()
+        item_a = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=shared_catch,
+            line_number=1,
+        )
+        item_b = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=shared_catch,
+            line_number=2,
+        )
+        service, fake_repo = _conflicts_service_with_fakes(invoice=invoice, items=[item_a, item_b])
+
+        await service.get_invoice_trip_catch_conflicts(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert fake_repo.usage_calls == [([shared_catch], invoice.tenant_id, invoice.id)]
+
+    async def test_zero_fills_a_trip_catch_absent_from_the_usage_rows(self) -> None:
+        invoice = _make_invoice()
+        item = _make_invoice_item(invoice_id=invoice.id, tenant_id=invoice.tenant_id)
+        service, _ = _conflicts_service_with_fakes(invoice=invoice, items=[item], usage_rows=[])
+
+        result = await service.get_invoice_trip_catch_conflicts(
+            invoice.id, tenant_id=invoice.tenant_id
+        )
+
+        assert len(result) == 1
+        assert result[0].trip_catch_id == item.trip_catch_id
+        assert result[0].other_invoice_count == 0
+        assert result[0].other_draft_quantity == Decimal("0.000")
+        assert result[0].other_consumed_quantity == Decimal("0.000")
+
+    async def test_maps_usage_row_fields_onto_the_other_prefixed_response(self) -> None:
+        invoice = _make_invoice()
+        item = _make_invoice_item(invoice_id=invoice.id, tenant_id=invoice.tenant_id)
+        row = _usage_row(
+            trip_catch_id=item.trip_catch_id,
+            invoice_count=2,
+            draft_quantity=Decimal("20.000"),
+            consumed_quantity=Decimal("40.000"),
+        )
+        service, _ = _conflicts_service_with_fakes(invoice=invoice, items=[item], usage_rows=[row])
+
+        result = await service.get_invoice_trip_catch_conflicts(
+            invoice.id, tenant_id=invoice.tenant_id
+        )
+
+        assert result[0].other_invoice_count == 2
+        assert result[0].other_draft_quantity == Decimal("20.000")
+        assert result[0].other_consumed_quantity == Decimal("40.000")
+
+    async def test_multiple_trip_catches_remain_independent_and_ordered(self) -> None:
+        invoice = _make_invoice()
+        catch_a, catch_b = uuid.uuid4(), uuid.uuid4()
+        item_a = _make_invoice_item(
+            invoice_id=invoice.id, tenant_id=invoice.tenant_id, trip_catch_id=catch_a, line_number=1
+        )
+        item_b = _make_invoice_item(
+            invoice_id=invoice.id, tenant_id=invoice.tenant_id, trip_catch_id=catch_b, line_number=2
+        )
+        row_a = _usage_row(
+            trip_catch_id=catch_a, invoice_count=2, consumed_quantity=Decimal("15.000")
+        )
+        service, _ = _conflicts_service_with_fakes(
+            invoice=invoice, items=[item_a, item_b], usage_rows=[row_a]
+        )
+
+        result = await service.get_invoice_trip_catch_conflicts(
+            invoice.id, tenant_id=invoice.tenant_id
+        )
+
+        assert [r.trip_catch_id for r in result] == [catch_a, catch_b]
+        assert result[0].other_invoice_count == 2
+        assert result[1].other_invoice_count == 0
+        assert result[1].other_draft_quantity == Decimal("0")
+
+
+def _preflight_service_with_fakes(
+    *,
+    invoice: Invoice | None = None,
+    items: list[InvoiceItem] | None = None,
+    trip_catches: list[_TripCatchStub] | None = None,
+    usage_rows: list[Any] | None = None,
+) -> tuple[InvoiceService, _FakeInvoiceRepo, _FakeTripCatchService]:
+    service = InvoiceService.__new__(InvoiceService)
+    fake_repo = _FakeInvoiceRepo()
+    if invoice is not None:
+        fake_repo.by_id[invoice.id] = invoice
+        fake_repo.items_by_invoice[invoice.id] = items or []
+    fake_repo.usage_rows = usage_rows or []
+    fake_trip_catch_service = _FakeTripCatchService()
+    fake_trip_catch_service.many_by_id = {tc.id: tc for tc in (trip_catches or [])}
+    service._repo = fake_repo  # type: ignore[assignment]
+    service._trip_catch_service = fake_trip_catch_service  # type: ignore[assignment]
+    return service, fake_repo, fake_trip_catch_service
+
+
+class TestGetIssuePreflight:
+    """InvoiceService.get_issue_preflight - Sprint 15 Session 10. The
+    aggregation/filtering logic itself is integration-tested
+    (test_invoice_api.py's TestGetInvoiceIssuePreflight); this covers what
+    the service adds: invoice existence/tenant/draft-only gating, collecting
+    and summing this invoice's own requested quantity per distinct trip
+    catch, comparing against live available_quantity, and only surfacing
+    genuinely insufficient catches."""
+
+    async def test_raises_not_found_when_invoice_missing(self) -> None:
+        service, _, _ = _preflight_service_with_fakes()
+
+        with pytest.raises(InvoiceNotFoundError):
+            await service.get_issue_preflight(uuid.uuid4(), tenant_id=uuid.uuid4())
+
+    async def test_raises_not_draft_for_an_already_issued_invoice(self) -> None:
+        invoice = _make_invoice(status=InvoiceStatus.ISSUED)
+        service, _, _ = _preflight_service_with_fakes(invoice=invoice, items=[])
+
+        with pytest.raises(InvoiceNotDraftError):
+            await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+    async def test_clean_preflight_when_invoice_has_no_items(self) -> None:
+        invoice = _make_invoice()
+        service, fake_repo, fake_trip_catch_service = _preflight_service_with_fakes(
+            invoice=invoice, items=[]
+        )
+
+        result = await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert result.can_issue_now is True
+        assert result.conflicts == []
+        assert fake_trip_catch_service.get_many_by_ids_calls == []
+        assert fake_repo.usage_calls == []
+
+    async def test_clean_preflight_when_available_quantity_is_sufficient(self) -> None:
+        invoice = _make_invoice()
+        catch = _TripCatchStub(available_quantity=Decimal("100.000"))
+        item = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=catch.id,
+            quantity=Decimal("30.000"),
+        )
+        service, _, _ = _preflight_service_with_fakes(
+            invoice=invoice, items=[item], trip_catches=[catch]
+        )
+
+        result = await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert result.can_issue_now is True
+        assert result.conflicts == []
+
+    async def test_flags_a_trip_catch_with_insufficient_available_quantity(self) -> None:
+        invoice = _make_invoice()
+        catch = _TripCatchStub(available_quantity=Decimal("25.000"))
+        item = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=catch.id,
+            quantity=Decimal("30.000"),
+        )
+        service, _, _ = _preflight_service_with_fakes(
+            invoice=invoice, items=[item], trip_catches=[catch]
+        )
+
+        result = await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert result.can_issue_now is False
+        assert len(result.conflicts) == 1
+        conflict = result.conflicts[0]
+        assert conflict.trip_catch_id == catch.id
+        assert conflict.requested_quantity == Decimal("30.000")
+        assert conflict.available_quantity == Decimal("25.000")
+        assert conflict.is_sufficient is False
+        assert conflict.shortfall_quantity == Decimal("5.000")
+
+    async def test_requested_quantity_exactly_equal_to_available_is_sufficient(self) -> None:
+        invoice = _make_invoice()
+        catch = _TripCatchStub(available_quantity=Decimal("30.000"))
+        item = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=catch.id,
+            quantity=Decimal("30.000"),
+        )
+        service, _, _ = _preflight_service_with_fakes(
+            invoice=invoice, items=[item], trip_catches=[catch]
+        )
+
+        result = await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert result.can_issue_now is True
+        assert result.conflicts == []
+
+    async def test_sums_multiple_items_on_the_same_trip_catch(self) -> None:
+        invoice = _make_invoice()
+        catch = _TripCatchStub(available_quantity=Decimal("30.000"))
+        item_a = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=catch.id,
+            line_number=1,
+            quantity=Decimal("20.000"),
+        )
+        item_b = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=catch.id,
+            line_number=2,
+            quantity=Decimal("15.000"),
+        )
+        service, _, _ = _preflight_service_with_fakes(
+            invoice=invoice, items=[item_a, item_b], trip_catches=[catch]
+        )
+
+        result = await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert len(result.conflicts) == 1
+        # 20 + 15 = 35 requested vs. 30 available - one conflict, not two.
+        assert result.conflicts[0].requested_quantity == Decimal("35.000")
+        assert result.conflicts[0].shortfall_quantity == Decimal("5.000")
+
+    async def test_multiple_trip_catches_remain_independent(self) -> None:
+        invoice = _make_invoice()
+        sufficient_catch = _TripCatchStub(available_quantity=Decimal("100.000"))
+        insufficient_catch = _TripCatchStub(available_quantity=Decimal("10.000"))
+        item_a = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=sufficient_catch.id,
+            line_number=1,
+            quantity=Decimal("20.000"),
+        )
+        item_b = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=insufficient_catch.id,
+            line_number=2,
+            quantity=Decimal("20.000"),
+        )
+        service, _, _ = _preflight_service_with_fakes(
+            invoice=invoice,
+            items=[item_a, item_b],
+            trip_catches=[sufficient_catch, insufficient_catch],
+        )
+
+        result = await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert result.can_issue_now is False
+        assert len(result.conflicts) == 1
+        assert result.conflicts[0].trip_catch_id == insufficient_catch.id
+
+    async def test_missing_trip_catch_is_treated_as_zero_available(self) -> None:
+        """A trip catch absent from get_many_by_ids's result (soft-deleted
+        since the item was added, or belongs to another tenant) is treated
+        as zero available - a conflict, even though the real issue() would
+        raise a different, more specific not-found error in that exact
+        case."""
+        invoice = _make_invoice()
+        missing_catch_id = uuid.uuid4()
+        item = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=missing_catch_id,
+            quantity=Decimal("10.000"),
+        )
+        service, _, _ = _preflight_service_with_fakes(
+            invoice=invoice, items=[item], trip_catches=[]
+        )
+
+        result = await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert result.can_issue_now is False
+        assert result.conflicts[0].available_quantity == Decimal("0")
+
+    async def test_includes_other_draft_quantity_from_the_shared_usage_aggregate(self) -> None:
+        invoice = _make_invoice()
+        catch = _TripCatchStub(available_quantity=Decimal("10.000"))
+        item = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=catch.id,
+            quantity=Decimal("30.000"),
+        )
+        row = _usage_row(trip_catch_id=catch.id, invoice_count=1, draft_quantity=Decimal("15.000"))
+        service, _, _ = _preflight_service_with_fakes(
+            invoice=invoice, items=[item], trip_catches=[catch], usage_rows=[row]
+        )
+
+        result = await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert result.conflicts[0].other_draft_quantity == Decimal("15.000")
+
+    async def test_forwards_exclude_invoice_id_to_the_usage_aggregate(self) -> None:
+        invoice = _make_invoice()
+        catch = _TripCatchStub(available_quantity=Decimal("5.000"))
+        item = _make_invoice_item(
+            invoice_id=invoice.id,
+            tenant_id=invoice.tenant_id,
+            trip_catch_id=catch.id,
+            quantity=Decimal("10.000"),
+        )
+        service, fake_repo, fake_trip_catch_service = _preflight_service_with_fakes(
+            invoice=invoice, items=[item], trip_catches=[catch]
+        )
+
+        await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert fake_repo.usage_calls == [([catch.id], invoice.tenant_id, invoice.id)]
+        assert fake_trip_catch_service.get_many_by_ids_calls == [([catch.id], invoice.tenant_id)]
+
+    async def test_items_with_no_trip_catch_id_are_skipped(self) -> None:
+        invoice = _make_invoice()
+        item = _make_invoice_item(
+            invoice_id=invoice.id, tenant_id=invoice.tenant_id, trip_catch_id=None
+        )
+        service, _, fake_trip_catch_service = _preflight_service_with_fakes(
+            invoice=invoice, items=[item]
+        )
+
+        result = await service.get_issue_preflight(invoice.id, tenant_id=invoice.tenant_id)
+
+        assert result.can_issue_now is True
+        assert result.conflicts == []
+        assert fake_trip_catch_service.get_many_by_ids_calls == []
+
+
 class TestRecalculateInvoice:
     async def test_no_items_zeroes_calculated_fields_but_keeps_charges(self) -> None:
         invoice = _make_invoice(transport_charge=Decimal("250.00"), other_charge=Decimal("10.00"))
@@ -809,6 +1666,30 @@ class TestIssueValidation:
 
         assert fake_trip_catch_service.deduct_calls  # the loop actually ran
         assert fake_session.rollback_calls == 1
+
+    async def test_forwards_trip_catch_error_details_unchanged(self) -> None:
+        """Sprint 15 Session 6: InvoiceInsufficientInventoryError must carry
+        the same `details` TripCatchInsufficientQuantityError raised with -
+        the conflict-resolution UI reads trip_catch_id from here."""
+        invoice = _make_invoice(status=InvoiceStatus.DRAFT)
+        item = _make_invoice_item(invoice_id=invoice.id, tenant_id=invoice.tenant_id)
+        company = _CompanyStub(company_id=invoice.company_id, status=CompanyStatus.ACTIVE)
+        details = {
+            "trip_catch_id": str(item.trip_catch_id),
+            "requested_quantity": "50.000",
+            "available_quantity": "40.000",
+        }
+        service, _, _, _, _ = _issue_service_with_fakes(
+            invoice=invoice,
+            items=[item],
+            company=company,
+            trip_catch_raises=TripCatchInsufficientQuantityError("not enough", details=details),
+        )
+
+        with pytest.raises(InvoiceInsufficientInventoryError) as exc_info:
+            await service.issue(invoice.id, tenant_id=invoice.tenant_id, actor_id=uuid.uuid4())
+
+        assert exc_info.value.details == details
 
     async def test_translates_trip_catch_not_found_during_deduction(self) -> None:
         invoice = _make_invoice(status=InvoiceStatus.DRAFT)

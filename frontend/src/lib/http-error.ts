@@ -50,6 +50,7 @@ export function buildApiError(
     message: detail?.message ?? "An unexpected error occurred.",
     fieldErrors: detail?.field_errors ?? undefined,
     requestId: detail?.request_id ?? null,
+    details: detail?.details ?? null,
   };
 }
 
@@ -64,6 +65,7 @@ export function apiErrorToEnvelope(error: ApiError): BackendErrorEnvelope {
     error: {
       code: error.code,
       message: error.message,
+      details: error.details ?? null,
       field_errors: error.fieldErrors ?? null,
       request_id: error.requestId ?? null,
     },

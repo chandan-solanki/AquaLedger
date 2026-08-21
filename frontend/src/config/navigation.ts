@@ -89,6 +89,13 @@ export const NAVIGATION: NavItem[] = [
     children: [
       { id: "boats", title: "Boats", icon: Ship, href: "/boats", singular: "Boat", permission: "boat:view" },
       { id: "trips", title: "Trips", icon: Route, href: "/trips", singular: "Trip", permission: "trip:view" },
+      {
+        id: "fish-stock",
+        title: "Fish Stock",
+        icon: Fish,
+        href: "/fish-stock",
+        permission: "fish:view",
+      },
     ],
   },
   {

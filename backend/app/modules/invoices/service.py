@@ -47,13 +47,20 @@ from app.modules.invoices.exceptions import (
 from app.modules.invoices.models import Invoice, InvoiceItem
 from app.modules.invoices.repository import InvoiceRepository
 from app.modules.invoices.schemas import (
+    ConflictingInvoiceSummary,
     InvoiceCreateRequest,
+    InvoiceIssuePreflightConflict,
+    InvoiceIssuePreflightResponse,
     InvoiceItemCreateRequest,
     InvoiceItemResponse,
     InvoiceItemUpdateRequest,
     InvoiceListParams,
     InvoiceResponse,
     InvoiceUpdateRequest,
+    TripCatchConflictResponse,
+    TripCatchDraftDemandResponse,
+    TripCatchInvoiceUsage,
+    TripCatchOtherInvoiceUsage,
 )
 from app.modules.payments.domain.reconciliation import (
     ReconciliationError,
@@ -524,7 +531,7 @@ class InvoiceService:
                         "The specified trip catch does not exist"
                     ) from exc
                 except TripCatchInsufficientQuantityError as exc:
-                    raise InvoiceInsufficientInventoryError(str(exc)) from exc
+                    raise InvoiceInsufficientInventoryError(str(exc), details=exc.details) from exc
                 # Flush after each deduction so the next iteration's FOR
                 # UPDATE lookup (in the rare case two items share a
                 # trip_catch_id) sees this one's change - this app's session
@@ -682,6 +689,285 @@ class InvoiceService:
         invoice.tax_amount = invoice_totals.tax_amount
         invoice.total_amount = invoice_totals.total_amount
         invoice.balance_amount = invoice_totals.balance_amount
+
+    async def get_trip_catch_draft_demand(
+        self,
+        trip_catch_id: uuid.UUID,
+        *,
+        tenant_id: uuid.UUID,
+        exclude_invoice_id: uuid.UUID | None,
+    ) -> TripCatchDraftDemandResponse:
+        """Sprint 15 Session 5: "how much of this trip catch do OTHER draft
+        invoices currently want" - a UX-only number, never a reservation.
+        Draft invoices still never mutate `TripCatch.available_quantity`
+        (that remains issue()-only); this only tells the Add/Edit Item form
+        that a competing draft exists, so an issue-time 422 from
+        `deduct_available_quantity` doesn't come as a surprise.
+
+        Validates the trip catch exists for this tenant first (reusing
+        TripCatchService, never its repository - ARCHITECTURE.md §2), so a
+        wrong-tenant or bogus id 404s exactly like every other trip-catch
+        lookup in this module, rather than silently returning a
+        zero-looking sum that could be mistaken for "not found == no
+        demand"."""
+        try:
+            await self._trip_catch_service.get(trip_catch_id, tenant_id=tenant_id)
+        except TripCatchNotFoundError as exc:
+            raise InvoiceItemTripCatchNotFoundError(
+                "The specified trip catch does not exist"
+            ) from exc
+
+        other_draft_quantity = await self._repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=exclude_invoice_id
+        )
+        return TripCatchDraftDemandResponse(
+            trip_catch_id=trip_catch_id, other_draft_quantity=other_draft_quantity
+        )
+
+    async def get_trip_catch_conflicts(
+        self,
+        trip_catch_id: uuid.UUID,
+        *,
+        tenant_id: uuid.UUID,
+        exclude_invoice_id: uuid.UUID | None,
+        required_quantity: Decimal | None,
+    ) -> TripCatchConflictResponse:
+        """Sprint 15 Session 6: "which other invoices might explain why
+        issuing this failed" - read-only, resolved fresh at request time
+        (never a reservation, never mutates stock). `available_quantity` is
+        re-fetched here rather than trusted from a stale 422's `details`,
+        since a moment may have passed since the failed issue attempt.
+
+        Same tenant/not-found handling as get_trip_catch_draft_demand.
+        Company names are resolved in one bulk call
+        (CompanyService.get_names_by_ids) regardless of how many
+        conflicting invoices are returned - never one lookup per row."""
+        try:
+            trip_catch = await self._trip_catch_service.get(trip_catch_id, tenant_id=tenant_id)
+        except TripCatchNotFoundError as exc:
+            raise InvoiceItemTripCatchNotFoundError(
+                "The specified trip catch does not exist"
+            ) from exc
+
+        rows = await self._repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=exclude_invoice_id
+        )
+        company_ids = list({row.company_id for row in rows})
+        company_names = await self._company_service.get_names_by_ids(
+            company_ids, tenant_id=tenant_id
+        )
+
+        conflicting_invoices = [
+            ConflictingInvoiceSummary(
+                invoice_id=row.id,
+                invoice_number=row.invoice_number,
+                status=row.status,
+                invoice_date=row.invoice_date,
+                company_name=company_names.get(row.company_id, "Unknown Company"),
+                quantity=row.quantity,
+            )
+            for row in rows
+        ]
+
+        shortfall_quantity = (
+            max(required_quantity - trip_catch.available_quantity, Decimal("0"))
+            if required_quantity is not None
+            else None
+        )
+
+        return TripCatchConflictResponse(
+            trip_catch_id=trip_catch_id,
+            required_quantity=required_quantity,
+            available_quantity=trip_catch.available_quantity,
+            shortfall_quantity=shortfall_quantity,
+            conflicting_invoices=conflicting_invoices,
+        )
+
+    async def get_trip_catch_invoice_usage(
+        self, trip_catch_ids: list[uuid.UUID], *, tenant_id: uuid.UUID
+    ) -> list[TripCatchInvoiceUsage]:
+        """Sprint 15 Session 7: batched "how many invoices reference this
+        catch" for the Fish Stock detail page's Contributing Catches table -
+        one query regardless of how many catches that page shows (never
+        N+1). No per-id existence check: a trip catch that doesn't exist,
+        belongs to another tenant, or simply has no invoice activity is
+        indistinguishable here and correctly reported as zero usage by its
+        absence from the result - the same bulk-lookup contract
+        FishService.get_many_by_ids and CompanyService.get_names_by_ids
+        already use, chosen deliberately over a per-id 404 so the Fish Stock
+        page never has to treat "no usage" as an error."""
+        if not trip_catch_ids:
+            return []
+        rows = await self._repo.get_trip_catch_invoice_usage(trip_catch_ids, tenant_id)
+        return [
+            TripCatchInvoiceUsage(
+                trip_catch_id=row.trip_catch_id,
+                invoice_count=row.invoice_count,
+                draft_quantity=self._quantize_quantity(row.draft_quantity),
+                consumed_quantity=self._quantize_quantity(row.consumed_quantity),
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def _quantize_quantity(value: Decimal) -> Decimal:
+        """The aggregate query's `coalesce(sum(case(...)), 0)` branches (see
+        InvoiceRepository.get_trip_catch_invoice_usage) return a bare,
+        unscaled `Decimal("0")` - not `Decimal("0.000")` - whenever every row
+        in a group hits the `else_=0` arm (e.g. a catch with only draft
+        usage still needs a `consumed_quantity` column, computed entirely
+        from zeros). Quantizing to 3 decimal places here keeps every
+        quantity in this response at the same NUMERIC(12,3) precision as a
+        genuine summed value, regardless of which branch produced it -
+        harmless on an already-3-decimal value, since quantizing never
+        changes its numeric value, only guarantees its string form."""
+        return value.quantize(Decimal("0.001"))
+
+    async def get_invoice_trip_catch_conflicts(
+        self, invoice_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> list[TripCatchOtherInvoiceUsage]:
+        """Sprint 15 Session 8: for each trip catch THIS invoice's own active
+        items reference, how much OTHER invoices also reference it - shown
+        proactively on the Invoice Detail page's item table, before any
+        issue attempt (unlike Session 6's get_trip_catch_conflicts, which is
+        only surfaced after a failed issue). One bounded query regardless of
+        how many items this invoice has (never N+1): reuses the same
+        grouped aggregate InvoiceRepository.get_trip_catch_invoice_usage
+        already computes for Session 7's Fish Stock page, passing
+        `exclude_invoice_id=invoice_id` so this invoice's own items - even
+        when several of them reference the same trip catch - are never
+        counted as their own conflict.
+
+        Returns exactly one entry per DISTINCT trip catch this invoice's
+        active items reference (in order of first appearance), even when
+        that catch has zero other usage - a small, bounded list (this
+        invoice's own item count), unlike Session 7's "absent means zero"
+        batch endpoint: the Invoice Detail page needs to render a cell for
+        every one of its own items, so an entry must exist for each of them
+        rather than being ambiguous between "no usage" and "not asked
+        about"."""
+        invoice = await self._get_or_raise(invoice_id, tenant_id)
+        items = await self._repo.search_items(invoice.id, tenant_id, q=None, q_fish_ids=None)
+
+        trip_catch_ids: list[uuid.UUID] = []
+        seen: set[uuid.UUID] = set()
+        for item in items:
+            if item.trip_catch_id is not None and item.trip_catch_id not in seen:
+                seen.add(item.trip_catch_id)
+                trip_catch_ids.append(item.trip_catch_id)
+
+        if not trip_catch_ids:
+            return []
+
+        rows = await self._repo.get_trip_catch_invoice_usage(
+            trip_catch_ids, tenant_id, exclude_invoice_id=invoice_id
+        )
+        usage_by_id = {row.trip_catch_id: row for row in rows}
+        return [
+            TripCatchOtherInvoiceUsage(
+                trip_catch_id=trip_catch_id,
+                other_invoice_count=(
+                    usage_by_id[trip_catch_id].invoice_count if trip_catch_id in usage_by_id else 0
+                ),
+                other_draft_quantity=self._quantize_quantity(
+                    usage_by_id[trip_catch_id].draft_quantity
+                    if trip_catch_id in usage_by_id
+                    else Decimal("0.000")
+                ),
+                other_consumed_quantity=self._quantize_quantity(
+                    usage_by_id[trip_catch_id].consumed_quantity
+                    if trip_catch_id in usage_by_id
+                    else Decimal("0.000")
+                ),
+            )
+            for trip_catch_id in trip_catch_ids
+        ]
+
+    async def get_issue_preflight(
+        self, invoice_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> InvoiceIssuePreflightResponse:
+        """Sprint 15 Session 10: "is this draft invoice likely issuable right
+        now" - a snapshot read, taken WITHOUT any row lock, of every distinct
+        trip catch this invoice's own active items reference. This is
+        advisory only: the only authoritative check remains issue()'s own
+        `SELECT ... FOR UPDATE` + revalidation inside
+        TripCatchService.deduct_available_quantity, re-read fresh at issue
+        time - a clean preflight here is never a guarantee that a concurrent
+        issue()/other invoice couldn't change the picture a moment later.
+        Nothing here reserves, locks, or deducts anything.
+
+        Only meaningful for a DRAFT invoice - the same precondition the real
+        issue() enforces (_ensure_draft), applied here too rather than
+        silently answering a "can I issue this" question for an invoice
+        that's already past that point (or was cancelled).
+
+        One bounded query set regardless of how many items/trip catches this
+        invoice has (never N+1): `_get_or_raise` (1), `search_items` (1),
+        `TripCatchService.get_many_by_ids` for live `available_quantity` (1),
+        and the same grouped aggregate `get_trip_catch_invoice_usage`
+        Sessions 7/8 already use for "other draft quantity" (1) - four
+        queries total, independent of item count.
+
+        `conflicts` lists ONLY the trip catches that are NOT currently
+        sufficient for this invoice's own (deduplicated, summed) requested
+        quantity - a sufficient catch never appears, so the warning UI can
+        render the array directly without filtering. A trip catch that no
+        longer exists for this tenant (e.g. soft-deleted since the item was
+        added) is treated as having zero available_quantity - genuinely a
+        conflict, even though the real issue() would fail with a different,
+        more specific error in that exact case (InvoiceItemTripCatchNotFoundError)."""
+        invoice = await self._get_or_raise(invoice_id, tenant_id)
+        self._ensure_draft(invoice)
+
+        items = await self._repo.search_items(invoice.id, tenant_id, q=None, q_fish_ids=None)
+
+        requested_by_catch: dict[uuid.UUID, Decimal] = {}
+        trip_catch_ids: list[uuid.UUID] = []
+        for item in items:
+            if item.trip_catch_id is None:
+                continue
+            if item.trip_catch_id not in requested_by_catch:
+                requested_by_catch[item.trip_catch_id] = Decimal("0")
+                trip_catch_ids.append(item.trip_catch_id)
+            requested_by_catch[item.trip_catch_id] += item.quantity
+
+        if not trip_catch_ids:
+            return InvoiceIssuePreflightResponse(
+                invoice_id=invoice_id, can_issue_now=True, conflicts=[]
+            )
+
+        trip_catches = await self._trip_catch_service.get_many_by_ids(
+            trip_catch_ids, tenant_id=tenant_id
+        )
+        available_by_id = {tc.id: tc.available_quantity for tc in trip_catches}
+
+        usage_rows = await self._repo.get_trip_catch_invoice_usage(
+            trip_catch_ids, tenant_id, exclude_invoice_id=invoice_id
+        )
+        other_draft_by_id = {row.trip_catch_id: row.draft_quantity for row in usage_rows}
+
+        conflicts: list[InvoiceIssuePreflightConflict] = []
+        for trip_catch_id in trip_catch_ids:
+            requested = requested_by_catch[trip_catch_id]
+            available = available_by_id.get(trip_catch_id, Decimal("0"))
+            if requested <= available:
+                continue
+            conflicts.append(
+                InvoiceIssuePreflightConflict(
+                    trip_catch_id=trip_catch_id,
+                    requested_quantity=requested,
+                    available_quantity=available,
+                    is_sufficient=False,
+                    shortfall_quantity=requested - available,
+                    other_draft_quantity=self._quantize_quantity(
+                        other_draft_by_id.get(trip_catch_id, Decimal("0.000"))
+                    ),
+                )
+            )
+
+        return InvoiceIssuePreflightResponse(
+            invoice_id=invoice_id, can_issue_now=len(conflicts) == 0, conflicts=conflicts
+        )
 
     async def _ensure_trip_catch_and_fish_valid(
         self,

@@ -443,3 +443,44 @@ class TestSearchTenantScoping:
         )
         assert total == 1
         assert rows[0].name == "Mine"
+
+
+class TestGetNamesByIds:
+    """CompanyRepository.get_names_by_ids - Sprint 15 Session 6's bulk name
+    lookup for the invoice-conflict list."""
+
+    async def test_returns_id_name_pairs_for_matching_companies(
+        self, repo: CompanyRepository, db_session: AsyncSession, tenant_id: uuid.UUID
+    ) -> None:
+        a = await _make_company(db_session, tenant_id, name="Alpha Traders")
+        b = await _make_company(db_session, tenant_id, name="Beta Traders")
+
+        rows = await repo.get_names_by_ids(tenant_id, [a.id, b.id])
+
+        assert {(row.id, row.name) for row in rows} == {
+            (a.id, "Alpha Traders"),
+            (b.id, "Beta Traders"),
+        }
+
+    async def test_excludes_soft_deleted_companies(
+        self, repo: CompanyRepository, db_session: AsyncSession, tenant_id: uuid.UUID
+    ) -> None:
+        deleted = await _make_company(db_session, tenant_id, deleted_at=datetime.now(UTC))
+        rows = await repo.get_names_by_ids(tenant_id, [deleted.id])
+        assert rows == []
+
+    async def test_never_returns_another_tenants_company(
+        self, repo: CompanyRepository, db_session: AsyncSession, tenant_id: uuid.UUID
+    ) -> None:
+        other_tenant = Tenant(name="Other Names Co", slug=f"other-names-{uuid.uuid4().hex[:8]}")
+        db_session.add(other_tenant)
+        await db_session.commit()
+        other_company = await _make_company(db_session, other_tenant.id)
+
+        rows = await repo.get_names_by_ids(tenant_id, [other_company.id])
+        assert rows == []
+
+    async def test_empty_ids_returns_empty_without_querying(
+        self, repo: CompanyRepository, tenant_id: uuid.UUID
+    ) -> None:
+        assert await repo.get_names_by_ids(tenant_id, []) == []

@@ -1191,3 +1191,1188 @@ class TestSearchItems:
 
         rows = await repo.search_items(invoice_id, tenant_id, q=None, q_fish_ids=None)
         assert [r.id for r in rows] == [target.id]
+
+
+class TestSumOtherDraftQuantity:
+    """InvoiceRepository.sum_other_draft_quantity - Sprint 15 Session 5's
+    "other draft demand" number. Mirrors TestSumOpenBalanceByCompany's
+    exclusion-by-exclusion structure, one behavior per test."""
+
+    async def test_sums_other_draft_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        invoice_a = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice_a.id, fish_id, trip_catch_id, quantity=Decimal("20.000")
+        )
+        invoice_b = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice_b.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert total == Decimal("50.000")
+
+    async def test_excludes_the_current_invoice(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        invoice_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        """The current invoice's own item (30 KG) must never count as
+        'other' demand, whether or not it's the specific item being edited -
+        exclusion is by invoice, not by item (Sprint 15 Session 5)."""
+        await _make_invoice_item(
+            db_session, tenant_id, invoice_id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+        other_invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            other_invoice.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("40.000"),
+        )
+
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=invoice_id
+        )
+        assert total == Decimal("40.000")
+
+    async def test_excludes_issued_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        issued = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.ISSUED)
+        await _make_invoice_item(
+            db_session, tenant_id, issued.id, fish_id, trip_catch_id, quantity=Decimal("20.000")
+        )
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert total == Decimal("0")
+
+    async def test_excludes_partially_paid_and_paid_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        partially_paid = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.PARTIALLY_PAID
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            partially_paid.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("20.000"),
+        )
+        paid = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.PAID)
+        await _make_invoice_item(
+            db_session, tenant_id, paid.id, fish_id, trip_catch_id, quantity=Decimal("15.000")
+        )
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert total == Decimal("0")
+
+    async def test_excludes_cancelled_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        cancelled = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.CANCELLED
+        )
+        await _make_invoice_item(
+            db_session, tenant_id, cancelled.id, fish_id, trip_catch_id, quantity=Decimal("20.000")
+        )
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert total == Decimal("0")
+
+    async def test_excludes_soft_deleted_draft_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        """A deleted invoice's status is left as-is (only deleted_at is set)
+        - status == DRAFT alone is not enough, deleted_at must be checked
+        too, or a soft-deleted draft's items would still count."""
+        deleted = await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.DRAFT,
+            deleted_at=datetime.now(UTC),
+        )
+        await _make_invoice_item(
+            db_session, tenant_id, deleted.id, fish_id, trip_catch_id, quantity=Decimal("20.000")
+        )
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert total == Decimal("0")
+
+    async def test_excludes_soft_deleted_items_on_active_draft_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            invoice.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("20.000"),
+            deleted_at=datetime.now(UTC),
+        )
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert total == Decimal("0")
+
+    async def test_multiple_draft_invoices_aggregate_correctly(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        invoice_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        """Available 100, Invoice A=20 + Invoice B=30 + Invoice C=10 = 60
+        other draft demand, with the current invoice (D) excluded even
+        though it has no items yet."""
+        for quantity in (Decimal("20.000"), Decimal("30.000"), Decimal("10.000")):
+            other_invoice = await _make_invoice(db_session, tenant_id, company_id)
+            await _make_invoice_item(
+                db_session, tenant_id, other_invoice.id, fish_id, trip_catch_id, quantity=quantity
+            )
+
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=invoice_id
+        )
+        assert total == Decimal("60.000")
+
+    async def test_different_trip_catches_of_the_same_fish_stay_independent(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        other_catch = await _make_trip_catch(db_session, tenant_id, trip_id, fish_id)
+        invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+        other_invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            other_invoice.id,
+            fish_id,
+            other_catch.id,
+            quantity=Decimal("20.000"),
+        )
+
+        total_for_first_catch = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        total_for_other_catch = await repo.sum_other_draft_quantity(
+            other_catch.id, tenant_id, exclude_invoice_id=None
+        )
+        assert total_for_first_catch == Decimal("30.000")
+        assert total_for_other_catch == Decimal("20.000")
+
+    async def test_scoped_to_one_tenant(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        other_tenant = Tenant(
+            name="Other Draft Demand Tenant", slug=f"other-draft-demand-{uuid.uuid4().hex[:8]}"
+        )
+        db_session.add(other_tenant)
+        await db_session.commit()
+        other_company = await _make_company(db_session, other_tenant.id)
+        other_invoice = await _make_invoice(db_session, other_tenant.id, other_company.id)
+        other_boat = await _make_boat(db_session, other_tenant.id)
+        other_trip = await _make_trip(db_session, other_tenant.id, other_boat.id)
+        other_fish = await _make_fish(db_session, other_tenant.id)
+        other_catch = await _make_trip_catch(
+            db_session, other_tenant.id, other_trip.id, other_fish.id
+        )
+        await _make_invoice_item(
+            db_session,
+            other_tenant.id,
+            other_invoice.id,
+            other_fish.id,
+            other_catch.id,
+            quantity=Decimal("999.000"),
+        )
+
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert total == Decimal("0")
+
+    async def test_no_other_draft_demand_returns_zero(
+        self, repo: InvoiceRepository, tenant_id: uuid.UUID, trip_catch_id: uuid.UUID
+    ) -> None:
+        total = await repo.sum_other_draft_quantity(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert total == Decimal("0")
+
+
+class TestListInvoicesReferencingTripCatch:
+    """InvoiceRepository.list_invoices_referencing_trip_catch - Sprint 15
+    Session 6's conflict-resolution query. One row per invoice (not per
+    item), each carrying its own id/number/status/date/company_id/quantity."""
+
+    async def test_returns_matching_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        invoice = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.ISSUED
+        )
+        await _make_invoice_item(
+            db_session, tenant_id, invoice.id, fish_id, trip_catch_id, quantity=Decimal("60.000")
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+
+        assert len(rows) == 1
+        assert rows[0].id == invoice.id
+        assert rows[0].company_id == company_id
+        assert rows[0].quantity == Decimal("60.000")
+
+    async def test_excludes_the_current_invoice(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        invoice_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        await _make_invoice_item(
+            db_session, tenant_id, invoice_id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+        other_invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            other_invoice.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("40.000"),
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=invoice_id
+        )
+
+        assert [r.id for r in rows] == [other_invoice.id]
+
+    async def test_includes_draft_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        draft = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.DRAFT)
+        await _make_invoice_item(
+            db_session, tenant_id, draft.id, fish_id, trip_catch_id, quantity=Decimal("20.000")
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+
+        assert len(rows) == 1
+        assert rows[0].status == InvoiceStatus.DRAFT
+
+    async def test_distinguishes_issued_from_draft_by_status_field(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        issued = await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.ISSUED,
+            invoice_number="INV/2026-27/00025",
+        )
+        await _make_invoice_item(
+            db_session, tenant_id, issued.id, fish_id, trip_catch_id, quantity=Decimal("60.000")
+        )
+        draft = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.DRAFT)
+        await _make_invoice_item(
+            db_session, tenant_id, draft.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+
+        by_id = {row.id: row for row in rows}
+        assert by_id[issued.id].status == InvoiceStatus.ISSUED
+        assert by_id[issued.id].invoice_number == "INV/2026-27/00025"
+        assert by_id[draft.id].status == InvoiceStatus.DRAFT
+        assert by_id[draft.id].invoice_number is None
+        # Actual consumers (non-draft) surface before pending drafts.
+        assert [row.id for row in rows] == [issued.id, draft.id]
+
+    async def test_includes_partially_paid_and_paid_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        partially_paid = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.PARTIALLY_PAID
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            partially_paid.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("15.000"),
+        )
+        paid = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.PAID)
+        await _make_invoice_item(
+            db_session, tenant_id, paid.id, fish_id, trip_catch_id, quantity=Decimal("25.000")
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+
+        assert {row.id for row in rows} == {partially_paid.id, paid.id}
+
+    async def test_excludes_cancelled_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        cancelled = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.CANCELLED
+        )
+        await _make_invoice_item(
+            db_session, tenant_id, cancelled.id, fish_id, trip_catch_id, quantity=Decimal("20.000")
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert rows == []
+
+    async def test_excludes_soft_deleted_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        deleted = await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.ISSUED,
+            deleted_at=datetime.now(UTC),
+        )
+        await _make_invoice_item(
+            db_session, tenant_id, deleted.id, fish_id, trip_catch_id, quantity=Decimal("20.000")
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert rows == []
+
+    async def test_excludes_soft_deleted_items(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        invoice = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.ISSUED
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            invoice.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("20.000"),
+            deleted_at=datetime.now(UTC),
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert rows == []
+
+    async def test_multiple_invoices_are_all_returned_independently(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        for quantity in (Decimal("10.000"), Decimal("20.000"), Decimal("30.000")):
+            invoice = await _make_invoice(db_session, tenant_id, company_id)
+            await _make_invoice_item(
+                db_session, tenant_id, invoice.id, fish_id, trip_catch_id, quantity=quantity
+            )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+
+        assert len(rows) == 3
+        assert {row.quantity for row in rows} == {
+            Decimal("10.000"),
+            Decimal("20.000"),
+            Decimal("30.000"),
+        }
+
+    async def test_one_row_per_invoice_even_with_two_items_on_the_same_catch(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            invoice.id,
+            fish_id,
+            trip_catch_id,
+            line_number=1,
+            quantity=Decimal("10.000"),
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            invoice.id,
+            fish_id,
+            trip_catch_id,
+            line_number=2,
+            quantity=Decimal("15.000"),
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+
+        assert len(rows) == 1
+        assert rows[0].quantity == Decimal("25.000")
+
+    async def test_different_trip_catches_stay_independent(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        other_catch = await _make_trip_catch(db_session, tenant_id, trip_id, fish_id)
+        invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+        other_invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            other_invoice.id,
+            fish_id,
+            other_catch.id,
+            quantity=Decimal("20.000"),
+        )
+
+        rows_first = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        rows_other = await repo.list_invoices_referencing_trip_catch(
+            other_catch.id, tenant_id, exclude_invoice_id=None
+        )
+
+        assert [r.id for r in rows_first] == [invoice.id]
+        assert [r.id for r in rows_other] == [other_invoice.id]
+
+    async def test_scoped_to_one_tenant(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        other_tenant = Tenant(
+            name="Other Conflict Tenant", slug=f"other-conflict-{uuid.uuid4().hex[:8]}"
+        )
+        db_session.add(other_tenant)
+        await db_session.commit()
+        other_company = await _make_company(db_session, other_tenant.id)
+        other_invoice = await _make_invoice(db_session, other_tenant.id, other_company.id)
+        other_boat = await _make_boat(db_session, other_tenant.id)
+        other_trip = await _make_trip(db_session, other_tenant.id, other_boat.id)
+        other_fish = await _make_fish(db_session, other_tenant.id)
+        other_catch = await _make_trip_catch(
+            db_session, other_tenant.id, other_trip.id, other_fish.id
+        )
+        await _make_invoice_item(
+            db_session,
+            other_tenant.id,
+            other_invoice.id,
+            other_fish.id,
+            other_catch.id,
+            quantity=Decimal("999.000"),
+        )
+
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert rows == []
+
+    async def test_no_conflicts_returns_empty_list(
+        self, repo: InvoiceRepository, tenant_id: uuid.UUID, trip_catch_id: uuid.UUID
+    ) -> None:
+        rows = await repo.list_invoices_referencing_trip_catch(
+            trip_catch_id, tenant_id, exclude_invoice_id=None
+        )
+        assert rows == []
+
+
+class TestGetTripCatchInvoiceUsage:
+    """InvoiceRepository.get_trip_catch_invoice_usage - Sprint 15 Session 7's
+    batched Fish Stock invoice-usage summary. One row per trip catch with at
+    least one qualifying invoice; a trip catch with none is simply absent."""
+
+    def _row_by_catch(self, rows: Any, catch_id: uuid.UUID) -> Any:
+        by_id = {row.trip_catch_id: row for row in rows}
+        return by_id[catch_id]
+
+    async def test_empty_ids_returns_empty_list_without_querying(
+        self, repo: InvoiceRepository, tenant_id: uuid.UUID
+    ) -> None:
+        rows = await repo.get_trip_catch_invoice_usage([], tenant_id)
+        assert rows == []
+
+    async def test_trip_catch_with_no_invoices_is_absent(
+        self, repo: InvoiceRepository, tenant_id: uuid.UUID, trip_catch_id: uuid.UUID
+    ) -> None:
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+        assert rows == []
+
+    async def test_unknown_trip_catch_id_is_absent_not_an_error(
+        self, repo: InvoiceRepository, tenant_id: uuid.UUID
+    ) -> None:
+        rows = await repo.get_trip_catch_invoice_usage([uuid.uuid4()], tenant_id)
+        assert rows == []
+
+    async def test_one_draft_invoice(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        draft = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.DRAFT)
+        await _make_invoice_item(
+            db_session, tenant_id, draft.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+
+        row = self._row_by_catch(rows, trip_catch_id)
+        assert row.invoice_count == 1
+        assert row.draft_quantity == Decimal("30.000")
+        assert row.consumed_quantity == Decimal("0")
+
+    async def test_one_issued_invoice(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        issued = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.ISSUED)
+        await _make_invoice_item(
+            db_session, tenant_id, issued.id, fish_id, trip_catch_id, quantity=Decimal("60.000")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+
+        row = self._row_by_catch(rows, trip_catch_id)
+        assert row.invoice_count == 1
+        assert row.consumed_quantity == Decimal("60.000")
+        assert row.draft_quantity == Decimal("0")
+
+    async def test_partially_paid_and_paid_count_as_consumed(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        partially_paid = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.PARTIALLY_PAID
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            partially_paid.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("15.000"),
+        )
+        paid = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.PAID)
+        await _make_invoice_item(
+            db_session, tenant_id, paid.id, fish_id, trip_catch_id, quantity=Decimal("25.000")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+
+        row = self._row_by_catch(rows, trip_catch_id)
+        assert row.invoice_count == 2
+        assert row.consumed_quantity == Decimal("40.000")
+        assert row.draft_quantity == Decimal("0")
+
+    async def test_multiple_invoices_counted_and_split_by_status(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        issued = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.ISSUED)
+        await _make_invoice_item(
+            db_session, tenant_id, issued.id, fish_id, trip_catch_id, quantity=Decimal("60.000")
+        )
+        draft = await _make_invoice(db_session, tenant_id, company_id, status=InvoiceStatus.DRAFT)
+        await _make_invoice_item(
+            db_session, tenant_id, draft.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+
+        row = self._row_by_catch(rows, trip_catch_id)
+        assert row.invoice_count == 2
+        assert row.draft_quantity == Decimal("30.000")
+        assert row.consumed_quantity == Decimal("60.000")
+
+    async def test_excludes_cancelled_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        cancelled = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.CANCELLED
+        )
+        await _make_invoice_item(
+            db_session, tenant_id, cancelled.id, fish_id, trip_catch_id, quantity=Decimal("20.000")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+        assert rows == []
+
+    async def test_excludes_soft_deleted_invoices(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        deleted = await _make_invoice(
+            db_session,
+            tenant_id,
+            company_id,
+            status=InvoiceStatus.ISSUED,
+            deleted_at=datetime.now(UTC),
+        )
+        await _make_invoice_item(
+            db_session, tenant_id, deleted.id, fish_id, trip_catch_id, quantity=Decimal("20.000")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+        assert rows == []
+
+    async def test_excludes_soft_deleted_items(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        invoice = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.ISSUED
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            invoice.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("20.000"),
+            deleted_at=datetime.now(UTC),
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+        assert rows == []
+
+    async def test_counts_distinct_invoices_not_items(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        """One invoice with two items against the same catch must still
+        count as one invoice, not two - callers need "how many invoices",
+        not "how many line items"."""
+        invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            invoice.id,
+            fish_id,
+            trip_catch_id,
+            line_number=1,
+            quantity=Decimal("10.000"),
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            invoice.id,
+            fish_id,
+            trip_catch_id,
+            line_number=2,
+            quantity=Decimal("15.000"),
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+
+        row = self._row_by_catch(rows, trip_catch_id)
+        assert row.invoice_count == 1
+        assert row.draft_quantity == Decimal("25.000")
+
+    async def test_decimal_quantities_preserved(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice.id, fish_id, trip_catch_id, quantity=Decimal("12.345")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+
+        row = self._row_by_catch(rows, trip_catch_id)
+        assert row.draft_quantity == Decimal("12.345")
+
+    async def test_multiple_trip_catches_remain_independent(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        other_catch = await _make_trip_catch(db_session, tenant_id, trip_id, fish_id)
+        invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+        # other_catch deliberately gets zero invoices - it must never inherit
+        # trip_catch_id's usage, and it must be entirely absent (not a zero row).
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id, other_catch.id], tenant_id)
+
+        assert {row.trip_catch_id for row in rows} == {trip_catch_id}
+        assert self._row_by_catch(rows, trip_catch_id).invoice_count == 1
+
+    async def test_batched_call_returns_one_row_per_catch_with_usage(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        other_catch = await _make_trip_catch(db_session, tenant_id, trip_id, fish_id)
+        invoice_a = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice_a.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+        invoice_b = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice_b.id, fish_id, other_catch.id, quantity=Decimal("20.000")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id, other_catch.id], tenant_id)
+
+        assert len(rows) == 2
+        assert self._row_by_catch(rows, trip_catch_id).draft_quantity == Decimal("30.000")
+        assert self._row_by_catch(rows, other_catch.id).draft_quantity == Decimal("20.000")
+
+    async def test_scoped_to_one_tenant(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        other_tenant = Tenant(name="Other Usage Tenant", slug=f"other-usage-{uuid.uuid4().hex[:8]}")
+        db_session.add(other_tenant)
+        await db_session.commit()
+        other_company = await _make_company(db_session, other_tenant.id)
+        other_invoice = await _make_invoice(db_session, other_tenant.id, other_company.id)
+        other_boat = await _make_boat(db_session, other_tenant.id)
+        other_trip = await _make_trip(db_session, other_tenant.id, other_boat.id)
+        other_fish = await _make_fish(db_session, other_tenant.id)
+        other_catch = await _make_trip_catch(
+            db_session, other_tenant.id, other_trip.id, other_fish.id
+        )
+        await _make_invoice_item(
+            db_session,
+            other_tenant.id,
+            other_invoice.id,
+            other_fish.id,
+            other_catch.id,
+            quantity=Decimal("999.000"),
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+        assert rows == []
+
+    async def test_single_query_regardless_of_id_count(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+    ) -> None:
+        """Never N+1: one round trip regardless of how many trip catches the
+        Fish Stock page asks about in a single call."""
+        catches = [
+            await _make_trip_catch(db_session, tenant_id, trip_id, fish_id) for _ in range(5)
+        ]
+        for catch in catches:
+            invoice = await _make_invoice(db_session, tenant_id, company_id)
+            await _make_invoice_item(
+                db_session, tenant_id, invoice.id, fish_id, catch.id, quantity=Decimal("5.000")
+            )
+
+        call_count = 0
+        original_execute = db_session.execute
+
+        async def counting_execute(*args: Any, **kwargs: Any) -> Any:
+            nonlocal call_count
+            call_count += 1
+            return await original_execute(*args, **kwargs)
+
+        db_session.execute = counting_execute  # type: ignore[method-assign]
+        try:
+            rows = await repo.get_trip_catch_invoice_usage([c.id for c in catches], tenant_id)
+        finally:
+            db_session.execute = original_execute  # type: ignore[method-assign]
+
+        assert call_count == 1
+        assert len(rows) == 5
+
+
+class TestGetTripCatchInvoiceUsageExcludeInvoiceId:
+    """InvoiceRepository.get_trip_catch_invoice_usage's `exclude_invoice_id`
+    parameter - Sprint 15 Session 8. Reuses the exact same aggregate query
+    TestGetTripCatchInvoiceUsage covers; this class only exercises the one
+    thing Session 8 adds: an invoice named by `exclude_invoice_id` is
+    entirely excluded from every count/sum, regardless of how many of its
+    own items reference the catch, while every OTHER invoice is unaffected."""
+
+    def _row_by_catch(self, rows: Any, catch_id: uuid.UUID) -> Any:
+        by_id = {row.trip_catch_id: row for row in rows}
+        return by_id[catch_id]
+
+    async def test_excluded_invoice_is_not_counted_at_all(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage(
+            [trip_catch_id], tenant_id, exclude_invoice_id=invoice.id
+        )
+
+        assert rows == []
+
+    async def test_excluding_none_behaves_exactly_like_the_default(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, invoice.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+
+        without_kwarg = await repo.get_trip_catch_invoice_usage([trip_catch_id], tenant_id)
+        with_none = await repo.get_trip_catch_invoice_usage(
+            [trip_catch_id], tenant_id, exclude_invoice_id=None
+        )
+
+        assert len(without_kwarg) == 1
+        assert (
+            self._row_by_catch(without_kwarg, trip_catch_id).invoice_count
+            == self._row_by_catch(with_none, trip_catch_id).invoice_count
+        )
+
+    async def test_other_invoices_on_the_same_catch_are_unaffected(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        """The exact scenario TASKS.md Sprint 15 Session 8 §3 requires:
+        current invoice A (30kg) plus other invoices B (20kg) and C (40kg) on
+        the same catch - excluding A must report 2 other invoices / 60kg,
+        never 3 invoices / 90kg."""
+        current = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, current.id, fish_id, trip_catch_id, quantity=Decimal("30.000")
+        )
+        other_draft = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.DRAFT
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            other_draft.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("20.000"),
+        )
+        other_issued = await _make_invoice(
+            db_session, tenant_id, company_id, status=InvoiceStatus.ISSUED
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            other_issued.id,
+            fish_id,
+            trip_catch_id,
+            quantity=Decimal("40.000"),
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage(
+            [trip_catch_id], tenant_id, exclude_invoice_id=current.id
+        )
+
+        row = self._row_by_catch(rows, trip_catch_id)
+        assert row.invoice_count == 2
+        assert row.draft_quantity == Decimal("20.000")
+        assert row.consumed_quantity == Decimal("40.000")
+
+    async def test_excluded_invoices_multiple_items_on_the_same_catch_are_all_excluded(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        current = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            current.id,
+            fish_id,
+            trip_catch_id,
+            line_number=1,
+            quantity=Decimal("10.000"),
+        )
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            current.id,
+            fish_id,
+            trip_catch_id,
+            line_number=2,
+            quantity=Decimal("20.000"),
+        )
+        other = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, other.id, fish_id, trip_catch_id, quantity=Decimal("5.000")
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage(
+            [trip_catch_id], tenant_id, exclude_invoice_id=current.id
+        )
+
+        row = self._row_by_catch(rows, trip_catch_id)
+        assert row.invoice_count == 1
+        assert row.draft_quantity == Decimal("5.000")
+
+    async def test_exclusion_does_not_affect_a_different_trip_catch(
+        self,
+        repo: InvoiceRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+        trip_catch_id: uuid.UUID,
+    ) -> None:
+        other_catch = await _make_trip_catch(db_session, tenant_id, trip_id, fish_id)
+        current = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session, tenant_id, current.id, fish_id, trip_catch_id, quantity=Decimal("10.000")
+        )
+        other_invoice = await _make_invoice(db_session, tenant_id, company_id)
+        await _make_invoice_item(
+            db_session,
+            tenant_id,
+            other_invoice.id,
+            fish_id,
+            other_catch.id,
+            quantity=Decimal("50.000"),
+        )
+
+        rows = await repo.get_trip_catch_invoice_usage(
+            [trip_catch_id, other_catch.id], tenant_id, exclude_invoice_id=current.id
+        )
+
+        assert {row.trip_catch_id for row in rows} == {other_catch.id}
+        assert self._row_by_catch(rows, other_catch.id).draft_quantity == Decimal("50.000")

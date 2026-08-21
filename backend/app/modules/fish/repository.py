@@ -115,3 +115,20 @@ class FishRepository:
             )
         )
         return list(result.scalars().all())
+
+    async def get_many_by_ids(self, tenant_id: uuid.UUID, fish_ids: list[uuid.UUID]) -> list[Fish]:
+        """Bulk fish lookup by id, tenant-scoped, excluding soft-deleted rows.
+        Exists so other modules (trip_catches' Fish Stock aggregation) can
+        resolve name/unit/is_active for a set of fish ids without joining the
+        Fish table directly - cross-module access goes through FishService
+        only (ARCHITECTURE.md §2)."""
+        if not fish_ids:
+            return []
+        result = await self._session.execute(
+            select(Fish).where(
+                Fish.tenant_id == tenant_id,
+                Fish.id.in_(fish_ids),
+                Fish.deleted_at.is_(None),
+            )
+        )
+        return list(result.scalars().all())

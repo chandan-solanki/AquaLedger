@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.fish.constants import FishUnit
 from app.modules.trip_catches.constants import CatchGrade
 
 
@@ -150,3 +151,108 @@ class TripCatchListParams(BaseModel):
                 f"Invalid sort field '{field}'. Allowed: {', '.join(sorted(_SORTABLE_FIELDS))}"
             )
         return value
+
+
+class FishStockRow(BaseModel):
+    """One row of the Fish Stock view - one fish, summed across every
+    non-deleted trip catch for that fish (Sprint 15 Session 2 - read-only
+    visibility into the quantities Sprint 7/9 already maintain). Only fish
+    with at least one trip catch appear - a fish never landed has nothing to
+    aggregate. `unit` is the fish master's own trading unit (`Fish.unit`) -
+    quantities are denominated in it, with no cross-unit conversion."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "fish_id": "019f83c8-6489-7bcf-beba-c241b7abbb03",
+                "fish_name": "Pomfret",
+                "unit": "kg",
+                "total_caught": "180.000",
+                "total_sold": "60.000",
+                "total_available": "120.000",
+                "total_waste": "0.000",
+            }
+        }
+    )
+
+    fish_id: uuid.UUID
+    fish_name: str
+    unit: FishUnit
+    total_caught: Decimal
+    total_sold: Decimal
+    total_available: Decimal
+    total_waste: Decimal
+
+
+class FishStockListParams(BaseModel):
+    """Query params for GET /fish-stock - bound via FastAPI's Depends()
+    model support."""
+
+    q: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Case-insensitive search across the fish's code and name.",
+        examples=["pomfret"],
+    )
+    is_active: bool | None = Field(
+        default=None, description="Filter by the fish master's active flag.", examples=[True]
+    )
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+
+class FishStockContributingCatch(BaseModel):
+    """One trip catch contributing to a fish's stock detail."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "trip_catch_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c02",
+                "trip_id": "019f9b1a-2f3e-7c31-9d4a-6b2e5f9a1c02",
+                "trip_number": "TRIP-2026-0042",
+                "landing_date": "2026-07-22",
+                "quantity_caught": "120.500",
+                "sold_quantity": "40.000",
+                "available_quantity": "80.500",
+                "waste_quantity": "0.000",
+            }
+        }
+    )
+
+    trip_catch_id: uuid.UUID
+    trip_id: uuid.UUID
+    trip_number: str
+    landing_date: date
+    quantity_caught: Decimal
+    sold_quantity: Decimal
+    available_quantity: Decimal
+    waste_quantity: Decimal
+
+
+class FishStockDetail(BaseModel):
+    """Fish Stock detail: one fish's totals plus every contributing trip
+    catch, most recently landed first."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "fish_id": "019f83c8-6489-7bcf-beba-c241b7abbb03",
+                "fish_name": "Pomfret",
+                "unit": "kg",
+                "total_caught": "180.000",
+                "total_sold": "60.000",
+                "total_available": "120.000",
+                "total_waste": "0.000",
+                "catches": [],
+            }
+        }
+    )
+
+    fish_id: uuid.UUID
+    fish_name: str
+    unit: FishUnit
+    total_caught: Decimal
+    total_sold: Decimal
+    total_available: Decimal
+    total_waste: Decimal
+    catches: list[FishStockContributingCatch]

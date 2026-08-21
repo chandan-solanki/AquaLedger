@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -13,6 +14,7 @@ from app.modules.auth.permissions import require_permission
 from app.modules.documents.constants import PartyType, SourceType
 from app.modules.documents.dependencies import get_document_record_service
 from app.modules.documents.service import DocumentRecordService
+from app.modules.fish.permissions import FISH_VIEW
 from app.modules.invoices.dependencies import get_invoice_service
 from app.modules.invoices.document_builder import build_invoice_document_data
 from app.modules.invoices.permissions import (
@@ -24,12 +26,17 @@ from app.modules.invoices.permissions import (
 )
 from app.modules.invoices.schemas import (
     InvoiceCreateRequest,
+    InvoiceIssuePreflightResponse,
     InvoiceItemCreateRequest,
     InvoiceItemResponse,
     InvoiceItemUpdateRequest,
     InvoiceListParams,
     InvoiceResponse,
     InvoiceUpdateRequest,
+    TripCatchConflictResponse,
+    TripCatchDraftDemandResponse,
+    TripCatchInvoiceUsage,
+    TripCatchOtherInvoiceUsage,
 )
 from app.modules.invoices.service import InvoiceService
 
@@ -449,6 +456,97 @@ async def list_invoices(
 
 
 @router.get(
+    "/trip-catches/{trip_catch_id}/draft-demand",
+    response_model=TripCatchDraftDemandResponse,
+    summary="Get other draft invoices' demand on a trip catch",
+    description=(
+        "Sprint 15 Session 5: `other_draft_quantity` is the sum of `quantity` across every "
+        "OTHER draft invoice's item referencing this trip catch (issued/partially_paid/paid/"
+        "cancelled invoices, soft-deleted invoices, and soft-deleted items are all excluded). "
+        "Pass `exclude_invoice_id` (the invoice you're currently editing) so its own items are "
+        "never counted as 'other' demand. This is informational only - draft invoices never "
+        "reserve or deduct stock, and the issue-time lock-protected check against "
+        "TripCatch.available_quantity remains the sole authority."
+    ),
+    responses={**_COMMON_ERROR_RESPONSES, **_NOT_FOUND_RESPONSE},
+    dependencies=[Depends(require_permission(INVOICE_VIEW))],
+)
+async def get_trip_catch_draft_demand(
+    trip_catch_id: uuid.UUID,
+    exclude_invoice_id: uuid.UUID | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    service: InvoiceService = Depends(get_invoice_service),
+) -> TripCatchDraftDemandResponse:
+    return await service.get_trip_catch_draft_demand(
+        trip_catch_id, tenant_id=current_user.tenant_id, exclude_invoice_id=exclude_invoice_id
+    )
+
+
+@router.get(
+    "/trip-catches/{trip_catch_id}/conflicts",
+    response_model=TripCatchConflictResponse,
+    summary="Get other invoices that may explain a stock conflict on a trip catch",
+    description=(
+        "Sprint 15 Session 6: for the conflict-resolution UI shown after a failed issue "
+        "(422 INVOICE_INSUFFICIENT_INVENTORY). Returns every OTHER non-cancelled, "
+        "non-deleted invoice referencing this trip catch - DRAFT invoices that merely "
+        "reference it, and ISSUED/PARTIALLY_PAID/PAID invoices that have already consumed "
+        "it - ordered with actual consumers first. Pass `exclude_invoice_id` (the invoice "
+        "that failed to issue) so it never appears as its own conflict, and "
+        "`required_quantity` (the quantity that failed) to get `shortfall_quantity` "
+        "computed against the current `available_quantity`. This is read-only and resolved "
+        "fresh - it never reserves or deducts stock, and never proves which invoice(s) "
+        "actually caused the shortage, only which ones plausibly could have."
+    ),
+    responses={**_COMMON_ERROR_RESPONSES, **_NOT_FOUND_RESPONSE},
+    dependencies=[Depends(require_permission(INVOICE_VIEW))],
+)
+async def get_trip_catch_conflicts(
+    trip_catch_id: uuid.UUID,
+    exclude_invoice_id: uuid.UUID | None = Query(default=None),
+    required_quantity: Decimal | None = Query(default=None, gt=0, max_digits=12, decimal_places=3),
+    current_user: User = Depends(get_current_user),
+    service: InvoiceService = Depends(get_invoice_service),
+) -> TripCatchConflictResponse:
+    return await service.get_trip_catch_conflicts(
+        trip_catch_id,
+        tenant_id=current_user.tenant_id,
+        exclude_invoice_id=exclude_invoice_id,
+        required_quantity=required_quantity,
+    )
+
+
+@router.get(
+    "/trip-catches/usage-summary",
+    response_model=list[TripCatchInvoiceUsage],
+    summary="Batched invoice-usage summary for a set of trip catches",
+    description=(
+        "Sprint 15 Session 7: for the Fish Stock detail page's Contributing Catches "
+        "table - one call for every trip catch shown on that page, never one request "
+        "per row. Pass `trip_catch_ids` as a repeated query param for the trip catches "
+        "to check; a trip catch with no qualifying invoice (or one that wasn't asked "
+        "about, doesn't exist, or belongs to another tenant) is simply absent from the "
+        "response - callers must treat a missing id as zero usage, not an error. Counts "
+        "DRAFT/ISSUED/PARTIALLY_PAID/PAID invoices only - CANCELLED and soft-deleted "
+        "invoices never count. This is informational visibility only: draft invoices "
+        "never reserve or deduct stock. Gated on `fish:view`, not `invoice:view` - the "
+        "count itself is Fish Stock visibility, not invoice content; navigating to an "
+        "actual invoice still requires `invoice:view` on the client side."
+    ),
+    responses={**_COMMON_ERROR_RESPONSES},
+    dependencies=[Depends(require_permission(FISH_VIEW))],
+)
+async def get_trip_catch_invoice_usage(
+    trip_catch_ids: Annotated[list[uuid.UUID] | None, Query()] = None,
+    current_user: User = Depends(get_current_user),
+    service: InvoiceService = Depends(get_invoice_service),
+) -> list[TripCatchInvoiceUsage]:
+    return await service.get_trip_catch_invoice_usage(
+        trip_catch_ids or [], tenant_id=current_user.tenant_id
+    )
+
+
+@router.get(
     "/{invoice_id}",
     response_model=InvoiceResponse,
     summary="Get an invoice by id",
@@ -704,6 +802,38 @@ async def list_invoice_items(
     return await service.list_items(invoice_id, tenant_id=current_user.tenant_id, q=q)
 
 
+@router.get(
+    "/{invoice_id}/trip-catch-conflicts",
+    response_model=list[TripCatchOtherInvoiceUsage],
+    summary="Get other-invoice usage for every trip catch this invoice references",
+    description=(
+        "Sprint 15 Session 8: for each trip catch this invoice's own active items "
+        "reference, how many OTHER invoices also reference it - shown proactively on "
+        "the Invoice Detail page, before any issue attempt is made. This invoice's own "
+        "items are always excluded from every count/sum, even when several of them "
+        "reference the same trip catch. One bounded query regardless of item count "
+        "(never N+1) - the same aggregate `GET /invoices/trip-catches/usage-summary` "
+        "(Session 7) uses internally, with this invoice's id excluded. Counts DRAFT/"
+        "ISSUED/PARTIALLY_PAID/PAID invoices only - CANCELLED and soft-deleted "
+        "invoices never count. Returns one entry per distinct trip catch this invoice "
+        "references (zero-filled when that catch has no other usage), or an empty "
+        "list if this invoice has no trip-catch-linked items. This is informational "
+        "visibility only: draft invoices never reserve or deduct stock. Gated on "
+        "`invoice:view`, matching the rest of this page."
+    ),
+    responses={**_COMMON_ERROR_RESPONSES, **_NOT_FOUND_RESPONSE},
+    dependencies=[Depends(require_permission(INVOICE_VIEW))],
+)
+async def get_invoice_trip_catch_conflicts(
+    invoice_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: InvoiceService = Depends(get_invoice_service),
+) -> list[TripCatchOtherInvoiceUsage]:
+    return await service.get_invoice_trip_catch_conflicts(
+        invoice_id, tenant_id=current_user.tenant_id
+    )
+
+
 @router.put(
     "/{invoice_id}/items/{item_id}",
     response_model=InvoiceItemResponse,
@@ -766,6 +896,34 @@ async def delete_invoice_item(
     await service.delete_item(
         invoice_id, item_id, tenant_id=current_user.tenant_id, actor_id=current_user.id
     )
+
+
+@router.get(
+    "/{invoice_id}/issue-preflight",
+    response_model=InvoiceIssuePreflightResponse,
+    summary="Check whether this draft invoice is likely issuable right now",
+    description=(
+        "Sprint 15 Session 10: a snapshot check, taken WITHOUT any row lock, of every "
+        "distinct trip catch this invoice's own active items reference, comparing this "
+        "invoice's own requested quantity (summed across items, if more than one "
+        "references the same catch) against that catch's current `available_quantity`. "
+        "`conflicts` lists only the trip catches that are NOT currently sufficient - an "
+        "empty list means `can_issue_now` is true. This is advisory visibility only: the "
+        "authoritative, lock-protected check remains `POST /{invoice_id}/issue` itself, "
+        "re-read fresh at issue time - a clean preflight here is never a guarantee that "
+        "issuing will actually succeed a moment later (another invoice could be issued "
+        "against the same trip catch in between). Only meaningful for a DRAFT invoice - "
+        "the same precondition `POST /{invoice_id}/issue` itself enforces."
+    ),
+    responses={**_COMMON_ERROR_RESPONSES, **_NOT_FOUND_RESPONSE, **_NOT_DRAFT_RESPONSE},
+    dependencies=[Depends(require_permission(INVOICE_ISSUE))],
+)
+async def get_invoice_issue_preflight(
+    invoice_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: InvoiceService = Depends(get_invoice_service),
+) -> InvoiceIssuePreflightResponse:
+    return await service.get_issue_preflight(invoice_id, tenant_id=current_user.tenant_id)
 
 
 @router.post(

@@ -19,6 +19,7 @@ from app.modules.reports.router import router as reports_router
 from app.modules.roles.router import router as roles_router
 from app.modules.supplier_payments.router import router as supplier_payments_router
 from app.modules.suppliers.router import router as suppliers_router
+from app.modules.trip_catches.router import fish_stock_router
 from app.modules.trip_catches.router import router as trip_catches_router
 from app.modules.trip_expenses.router import router as trip_expenses_router
 from app.modules.trips.router import router as trips_router
@@ -33,6 +34,7 @@ api_v1_router.include_router(fish_router)
 api_v1_router.include_router(boats_router)
 api_v1_router.include_router(trips_router)
 api_v1_router.include_router(trip_catches_router)
+api_v1_router.include_router(fish_stock_router)
 api_v1_router.include_router(trip_expenses_router)
 api_v1_router.include_router(invoices_router)
 api_v1_router.include_router(payments_router)

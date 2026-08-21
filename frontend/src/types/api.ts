@@ -31,4 +31,8 @@ export interface ApiError {
   message: string;
   fieldErrors?: ApiFieldErrors;
   requestId?: string | null;
+  /** Mirrors the backend's ErrorDetail.details (app/common/schemas.py) - structured, error-specific
+   * data (e.g. INVOICE_INSUFFICIENT_INVENTORY's trip_catch_id/requested_quantity/available_quantity,
+   * Sprint 15 Session 6). Most errors don't set this; callers narrow by `code` before reading it. */
+  details?: Record<string, unknown> | null;
 }

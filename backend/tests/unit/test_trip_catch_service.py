@@ -54,6 +54,9 @@ class _FakeTripCatchRepo:
         self.last_search_call: dict[str, Any] | None = None
         self.locked_row: TripCatch | None = None
         self.get_for_update_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
+        # For get_many_by_ids (Sprint 15 Session 10).
+        self.many_by_id: list[TripCatch] = []
+        self.get_many_by_ids_calls: list[tuple[uuid.UUID, list[uuid.UUID]]] = []
 
     async def search(self, tenant_id: uuid.UUID, **kwargs: Any) -> tuple[list[TripCatch], int]:
         self.last_search_call = {"tenant_id": tenant_id, **kwargs}
@@ -64,6 +67,12 @@ class _FakeTripCatchRepo:
     ) -> TripCatch | None:
         self.get_for_update_calls.append((trip_catch_id, tenant_id))
         return self.locked_row
+
+    async def get_many_by_ids(
+        self, tenant_id: uuid.UUID, trip_catch_ids: list[uuid.UUID]
+    ) -> list[TripCatch]:
+        self.get_many_by_ids_calls.append((tenant_id, trip_catch_ids))
+        return [tc for tc in self.many_by_id if tc.id in trip_catch_ids]
 
 
 class _TripStub:
@@ -426,6 +435,28 @@ class TestDeductAvailableQuantity:
         assert trip_catch.available_quantity == Decimal("10.000")
         assert trip_catch.sold_quantity == Decimal("0.000")
 
+    async def test_insufficient_quantity_error_carries_structured_details(self) -> None:
+        """Sprint 15 Session 6: the conflict-resolution UI reads
+        trip_catch_id/requested_quantity/available_quantity straight off
+        this exception's `details` rather than re-querying."""
+        trip_catch = _make_trip_catch(available_quantity=Decimal("10.000"))
+        service, fake_repo, _, _ = _service_with_fakes()
+        fake_repo.locked_row = trip_catch
+
+        with pytest.raises(TripCatchInsufficientQuantityError) as exc_info:
+            await service.deduct_available_quantity(
+                trip_catch.id,
+                Decimal("10.001"),
+                tenant_id=trip_catch.tenant_id,
+                actor_id=uuid.uuid4(),
+            )
+
+        assert exc_info.value.details == {
+            "trip_catch_id": str(trip_catch.id),
+            "requested_quantity": "10.001",
+            "available_quantity": "10.000",
+        }
+
     async def test_raises_not_found_when_trip_catch_missing(self) -> None:
         service, fake_repo, _, _ = _service_with_fakes()
         fake_repo.locked_row = None
@@ -446,6 +477,54 @@ class TestDeductAvailableQuantity:
         )
 
         assert fake_repo.get_for_update_calls == [(trip_catch.id, tenant_id)]
+
+
+class TestGetManyByIds:
+    """TripCatchService.get_many_by_ids - Sprint 15 Session 10. The
+    tenant-scoping/soft-delete-exclusion logic itself is integration-tested
+    (test_trip_catch_repository.py's TestGetManyByIds); this covers what the
+    service adds: the empty-input short-circuit and row-to-response mapping."""
+
+    async def test_empty_ids_returns_empty_list_without_querying(self) -> None:
+        service, fake_repo, _, _ = _service_with_fakes()
+
+        result = await service.get_many_by_ids([], tenant_id=uuid.uuid4())
+
+        assert result == []
+        assert fake_repo.get_many_by_ids_calls == []
+
+    async def test_maps_rows_to_responses(self) -> None:
+        trip_catch = _make_trip_catch(available_quantity=Decimal("42.000"))
+        service, fake_repo, _, _ = _service_with_fakes()
+        fake_repo.many_by_id = [trip_catch]
+
+        result = await service.get_many_by_ids([trip_catch.id], tenant_id=uuid.uuid4())
+
+        assert len(result) == 1
+        assert result[0].id == trip_catch.id
+        assert result[0].available_quantity == Decimal("42.000")
+
+    async def test_a_trip_catch_absent_from_the_repo_result_is_absent_from_the_response(
+        self,
+    ) -> None:
+        requested = [uuid.uuid4(), uuid.uuid4()]
+        trip_catch = _make_trip_catch(id=requested[0])
+        service, fake_repo, _, _ = _service_with_fakes()
+        fake_repo.many_by_id = [trip_catch]
+
+        result = await service.get_many_by_ids(requested, tenant_id=uuid.uuid4())
+
+        assert len(result) == 1
+        assert result[0].id == requested[0]
+
+    async def test_forwards_ids_and_tenant_to_the_repository(self) -> None:
+        service, fake_repo, _, _ = _service_with_fakes()
+        ids = [uuid.uuid4(), uuid.uuid4()]
+        tenant_id = uuid.uuid4()
+
+        await service.get_many_by_ids(ids, tenant_id=tenant_id)
+
+        assert fake_repo.get_many_by_ids_calls == [(tenant_id, ids)]
 
 
 def test_make_trip_catch_helper_produces_a_response_compatible_row() -> None:

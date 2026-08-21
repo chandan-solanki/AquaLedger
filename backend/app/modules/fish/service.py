@@ -108,6 +108,19 @@ class FishService:
         trip_catches module's fish-name search - see FishRepository.find_ids_by_name."""
         return await self._repo.find_ids_by_name(tenant_id, f"%{q.strip()}%")
 
+    async def get_many_by_ids(
+        self, fish_ids: list[uuid.UUID], *, tenant_id: uuid.UUID
+    ) -> list[FishResponse]:
+        """Bulk fish lookup for other modules' aggregation views (e.g. the
+        trip_catches module's Fish Stock rollup) - tenant-scoped, excludes
+        soft-deleted fish so a fish deleted after being caught silently drops
+        out of the results rather than being surfaced as normal stock. See
+        FishRepository.get_many_by_ids."""
+        if not fish_ids:
+            return []
+        fish_rows = await self._repo.get_many_by_ids(tenant_id, fish_ids)
+        return [self._to_response(fish) for fish in fish_rows]
+
     async def _get_or_raise(self, fish_id: uuid.UUID, tenant_id: uuid.UUID) -> Fish:
         fish = await self._repo.get_by_id(fish_id, tenant_id)
         if fish is None:

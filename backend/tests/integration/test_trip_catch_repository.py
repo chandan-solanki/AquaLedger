@@ -706,3 +706,102 @@ class TestSearchTenantScoping:
         rows, total = await _search(repo, tenant_id)
         assert total == 1
         assert rows[0].id == mine.id
+
+
+class TestGetManyByIds:
+    """TripCatchRepository.get_many_by_ids - Sprint 15 Session 10's bulk
+    lookup, added for the invoice issue preflight's need to read current
+    available_quantity for every trip catch an invoice references in one
+    query, never one per catch."""
+
+    async def test_empty_ids_returns_empty_list(
+        self, repo: TripCatchRepository, tenant_id: uuid.UUID
+    ) -> None:
+        assert await repo.get_many_by_ids(tenant_id, []) == []
+
+    async def test_returns_matching_rows(
+        self,
+        repo: TripCatchRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+    ) -> None:
+        catch_a = await _make_trip_catch(db_session, tenant_id, trip_id, fish_id)
+        catch_b = await _make_trip_catch(db_session, tenant_id, trip_id, fish_id)
+
+        rows = await repo.get_many_by_ids(tenant_id, [catch_a.id, catch_b.id])
+
+        assert {row.id for row in rows} == {catch_a.id, catch_b.id}
+
+    async def test_unknown_id_is_absent_not_an_error(
+        self, repo: TripCatchRepository, tenant_id: uuid.UUID
+    ) -> None:
+        rows = await repo.get_many_by_ids(tenant_id, [uuid.uuid4()])
+        assert rows == []
+
+    async def test_excludes_soft_deleted_rows(
+        self,
+        repo: TripCatchRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+    ) -> None:
+        deleted = await _make_trip_catch(
+            db_session, tenant_id, trip_id, fish_id, deleted_at=datetime.now(UTC)
+        )
+
+        rows = await repo.get_many_by_ids(tenant_id, [deleted.id])
+        assert rows == []
+
+    async def test_excludes_rows_from_another_tenant(
+        self,
+        repo: TripCatchRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+    ) -> None:
+        mine = await _make_trip_catch(db_session, tenant_id, trip_id, fish_id)
+        other_tenant = Tenant(
+            name="Other Bulk Lookup Tenant", slug=f"other-bulk-lookup-{uuid.uuid4().hex[:8]}"
+        )
+        db_session.add(other_tenant)
+        await db_session.commit()
+        other_boat = await _make_boat(db_session, other_tenant.id)
+        other_trip = await _make_trip(db_session, other_tenant.id, other_boat.id)
+        other_fish = await _make_fish(db_session, other_tenant.id)
+        other = await _make_trip_catch(db_session, other_tenant.id, other_trip.id, other_fish.id)
+
+        rows = await repo.get_many_by_ids(tenant_id, [mine.id, other.id])
+        assert {row.id for row in rows} == {mine.id}
+
+    async def test_single_query_regardless_of_id_count(
+        self,
+        repo: TripCatchRepository,
+        db_session: AsyncSession,
+        tenant_id: uuid.UUID,
+        trip_id: uuid.UUID,
+        fish_id: uuid.UUID,
+    ) -> None:
+        catches = [
+            await _make_trip_catch(db_session, tenant_id, trip_id, fish_id) for _ in range(5)
+        ]
+
+        call_count = 0
+        original_execute = db_session.execute
+
+        async def counting_execute(*args: Any, **kwargs: Any) -> Any:
+            nonlocal call_count
+            call_count += 1
+            return await original_execute(*args, **kwargs)
+
+        db_session.execute = counting_execute  # type: ignore[method-assign]
+        try:
+            rows = await repo.get_many_by_ids(tenant_id, [c.id for c in catches])
+        finally:
+            db_session.execute = original_execute  # type: ignore[method-assign]
+
+        assert call_count == 1
+        assert len(rows) == 5

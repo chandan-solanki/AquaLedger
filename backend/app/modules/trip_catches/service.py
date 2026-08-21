@@ -11,6 +11,7 @@ from app.core.errors import AppException, ConflictError
 from app.modules.fish.exceptions import FishNotFoundError
 from app.modules.fish.service import FishService
 from app.modules.trip_catches.exceptions import (
+    FishStockFishNotFoundError,
     TripCatchFishNotFoundError,
     TripCatchInsufficientQuantityError,
     TripCatchNotFoundError,
@@ -21,6 +22,10 @@ from app.modules.trip_catches.exceptions import (
 from app.modules.trip_catches.models import TripCatch
 from app.modules.trip_catches.repository import TripCatchRepository
 from app.modules.trip_catches.schemas import (
+    FishStockContributingCatch,
+    FishStockDetail,
+    FishStockListParams,
+    FishStockRow,
     TripCatchCreateRequest,
     TripCatchListParams,
     TripCatchResponse,
@@ -73,6 +78,24 @@ class TripCatchService:
     async def get(self, trip_catch_id: uuid.UUID, *, tenant_id: uuid.UUID) -> TripCatchResponse:
         trip_catch = await self._get_or_raise(trip_catch_id, tenant_id)
         return self._to_response(trip_catch)
+
+    async def get_many_by_ids(
+        self, trip_catch_ids: list[uuid.UUID], *, tenant_id: uuid.UUID
+    ) -> list[TripCatchResponse]:
+        """Bulk trip catch lookup for other modules' aggregation views (e.g.
+        Sprint 15 Session 10's invoice issue preflight, which needs current
+        `available_quantity` for every distinct trip catch an invoice
+        references in one query, never one per catch). Tenant-scoped,
+        excludes soft-deleted rows - same "missing means absent" bulk-lookup
+        contract as FishService.get_many_by_ids/CompanyService.get_names_by_ids;
+        callers must not treat an absent id as an error. This is a plain
+        read, not `get_by_id_for_update` - callers needing the lock-protected
+        value for an actual mutation (deduct_available_quantity) still use
+        that path; this one is for advisory/informational reads only."""
+        if not trip_catch_ids:
+            return []
+        trip_catches = await self._repo.get_many_by_ids(tenant_id, trip_catch_ids)
+        return [self._to_response(trip_catch) for trip_catch in trip_catches]
 
     async def list_catches(
         self, *, tenant_id: uuid.UUID, params: TripCatchListParams
@@ -191,16 +214,148 @@ class TripCatchService:
         this method only mutates and returns the updated row, the same FOR
         UPDATE pattern update() uses but without a commit - the deduction
         must land atomically with the rest of the issue transaction
-        (invoice number, status, company outstanding_amount)."""
+        (invoice number, status, company outstanding_amount).
+
+        Sprint 15 Session 6: the raised error's `details` carry the values
+        already in scope at the moment of failure (the id, what was asked
+        for, and what was actually available under lock) so
+        InvoiceService.issue can forward them unchanged into
+        InvoiceInsufficientInventoryError - the conflict-resolution UI reads
+        these instead of re-deriving them from a second, potentially-stale
+        query."""
         trip_catch = await self._get_or_raise_for_update(trip_catch_id, tenant_id)
         if quantity > trip_catch.available_quantity:
             raise TripCatchInsufficientQuantityError(
-                "Quantity exceeds the trip catch's available quantity"
+                "Quantity exceeds the trip catch's available quantity",
+                details={
+                    "trip_catch_id": str(trip_catch_id),
+                    "requested_quantity": str(quantity),
+                    "available_quantity": str(trip_catch.available_quantity),
+                },
             )
         trip_catch.available_quantity -= quantity
         trip_catch.sold_quantity += quantity
         trip_catch.updated_by = actor_id
         return self._to_response(trip_catch)
+
+    async def get_fish_stock_list(
+        self, *, tenant_id: uuid.UUID, params: FishStockListParams
+    ) -> PaginatedResponse[FishStockRow]:
+        """Fish Stock list (Sprint 15 Session 2): sums quantity_caught/
+        sold_quantity/available_quantity/waste_quantity per fish from
+        trip_catches, then resolves fish name/unit/is_active in one bulk
+        call to FishService - two queries total regardless of catalog size,
+        never a join across module boundaries (ARCHITECTURE.md §2). Fish
+        metadata is the source of truth for q/is_active filtering and for
+        excluding a fish that's since been soft-deleted - an aggregate row
+        whose fish can't be resolved is silently dropped rather than
+        surfaced as stock for a fish that no longer exists."""
+        aggregates = await self._repo.aggregate_stock_by_fish(tenant_id)
+        if not aggregates:
+            return PaginatedResponse(
+                data=[],
+                meta=PaginationMeta(
+                    total_records=0,
+                    total_pages=0,
+                    current_page=params.page,
+                    page_size=params.page_size,
+                    has_next=False,
+                    has_previous=False,
+                ),
+            )
+
+        fish_ids = [agg.fish_id for agg in aggregates]
+        fish_by_id = {
+            fish.id: fish
+            for fish in await self._fish_service.get_many_by_ids(fish_ids, tenant_id=tenant_id)
+        }
+
+        q = params.q.strip().lower() if params.q and params.q.strip() else None
+        rows: list[FishStockRow] = []
+        for agg in aggregates:
+            fish = fish_by_id.get(agg.fish_id)
+            if fish is None:
+                continue
+            if params.is_active is not None and fish.is_active != params.is_active:
+                continue
+            if q is not None and q not in fish.name.lower() and q not in fish.code.lower():
+                continue
+            rows.append(
+                FishStockRow(
+                    fish_id=fish.id,
+                    fish_name=fish.name,
+                    unit=fish.unit,
+                    total_caught=agg.total_caught,
+                    total_sold=agg.total_sold,
+                    total_available=agg.total_available,
+                    total_waste=agg.total_waste,
+                )
+            )
+        rows.sort(key=lambda row: row.fish_name.lower())
+
+        total = len(rows)
+        total_pages = math.ceil(total / params.page_size) if total else 0
+        start = (params.page - 1) * params.page_size
+        page_rows = rows[start : start + params.page_size]
+        meta = PaginationMeta(
+            total_records=total,
+            total_pages=total_pages,
+            current_page=params.page,
+            page_size=params.page_size,
+            has_next=params.page < total_pages,
+            has_previous=params.page > 1,
+        )
+        return PaginatedResponse(data=page_rows, meta=meta)
+
+    async def get_fish_stock_detail(
+        self, fish_id: uuid.UUID, *, tenant_id: uuid.UUID
+    ) -> FishStockDetail:
+        """Fish Stock detail (Sprint 15 Session 2): one fish's totals plus
+        every contributing trip catch. Totals are summed from the same rows
+        returned for the contributing-catches list, not a second aggregate
+        query. trip_number is resolved via one bulk TripService call for the
+        distinct trip ids referenced - never a join across module
+        boundaries."""
+        try:
+            fish = await self._fish_service.get(fish_id, tenant_id=tenant_id)
+        except FishNotFoundError as exc:
+            raise FishStockFishNotFoundError("Fish not found") from exc
+
+        catches = await self._repo.get_by_fish_id(tenant_id, fish_id)
+
+        trip_ids = list({catch.trip_id for catch in catches})
+        trips_by_id = {
+            trip.id: trip
+            for trip in await self._trip_service.get_many_by_ids(trip_ids, tenant_id=tenant_id)
+        }
+
+        contributing = [
+            FishStockContributingCatch(
+                trip_catch_id=catch.id,
+                trip_id=catch.trip_id,
+                trip_number=trips_by_id[catch.trip_id].trip_number
+                if catch.trip_id in trips_by_id
+                else "",
+                landing_date=catch.landing_date,
+                quantity_caught=catch.quantity_caught,
+                sold_quantity=catch.sold_quantity,
+                available_quantity=catch.available_quantity,
+                waste_quantity=catch.waste_quantity,
+            )
+            for catch in catches
+        ]
+
+        zero = Decimal("0")
+        return FishStockDetail(
+            fish_id=fish.id,
+            fish_name=fish.name,
+            unit=fish.unit,
+            total_caught=sum((c.quantity_caught for c in catches), zero),
+            total_sold=sum((c.sold_quantity for c in catches), zero),
+            total_available=sum((c.available_quantity for c in catches), zero),
+            total_waste=sum((c.waste_quantity for c in catches), zero),
+            catches=contributing,
+        )
 
     async def _ensure_trip_returned(self, trip_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
         try:

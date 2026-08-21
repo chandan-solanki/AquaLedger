@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { ErrorState } from "@/components/feedback/error-state";
 import { FormPageTemplate } from "@/components/templates/form-page-template";
@@ -15,9 +15,17 @@ import { dismissToast, toastLoading, toastSuccess } from "@/lib/toast";
  * lands in `draft` status with `invoice_number` NULL (numbers are assigned
  * only at issue, a later session's workflow), so the success toast never
  * references a number.
+ *
+ * Sprint 15 Session 4: an optional `?tripCatchId=` query param carries a
+ * specific catch chosen from the Fish Stock detail page's "Create Invoice"
+ * action. This page never selects a customer or line item itself - it only
+ * forwards the id to the newly-created invoice's Detail page, which opens
+ * the Add Item dialog pre-filled with that catch (`InvoiceItemTable`).
  */
 export function InvoiceCreatePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const prefillTripCatchId = searchParams.get("tripCatchId") ?? undefined;
   const { hasPermission } = usePermissions();
   const createInvoice = useCreateInvoice();
 
@@ -33,10 +41,12 @@ export function InvoiceCreatePage() {
   async function handleSubmit(values: InvoiceFormValues) {
     const loadingToastId = toastLoading("Creating invoice…");
     try {
-      await createInvoice.mutateAsync(toInvoiceRequestPayload(values));
+      const invoice = await createInvoice.mutateAsync(toInvoiceRequestPayload(values));
       dismissToast(loadingToastId);
       toastSuccess("Draft invoice was created.");
-      router.push("/invoices");
+      router.push(
+        prefillTripCatchId ? `/invoices/${invoice.id}?openItem=${prefillTripCatchId}` : "/invoices"
+      );
     } catch (error) {
       dismissToast(loadingToastId);
       // Field-error mapping / the failure toast is InvoiceForm's own job.

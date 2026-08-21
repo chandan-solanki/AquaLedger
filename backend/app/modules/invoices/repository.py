@@ -1,9 +1,10 @@
 import uuid
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Row, case, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,18 @@ _SORT_COLUMNS: dict[str, Any] = {
 # wouldn't change the sum - but leaving them out keeps the query's intent
 # ("still-open invoices") explicit rather than incidental.
 _OPEN_INVOICE_STATUSES = (InvoiceStatus.ISSUED, InvoiceStatus.PARTIALLY_PAID)
+
+# Sprint 15 Session 6: every status that can plausibly explain a stock
+# conflict - a DRAFT that merely references the catch, or an
+# ISSUED/PARTIALLY_PAID/PAID invoice that has already consumed it.
+# CANCELLED is deliberately excluded - TASKS.md: "Cancelled invoices must
+# never be presented as active conflicts."
+_CONFLICT_INVOICE_STATUSES = (
+    InvoiceStatus.DRAFT,
+    InvoiceStatus.ISSUED,
+    InvoiceStatus.PARTIALLY_PAID,
+    InvoiceStatus.PAID,
+)
 
 
 class InvoiceRepository:
@@ -233,6 +246,180 @@ class InvoiceRepository:
         step."""
         self._session.add(item)
         return item
+
+    async def sum_other_draft_quantity(
+        self,
+        trip_catch_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        *,
+        exclude_invoice_id: uuid.UUID | None,
+    ) -> Decimal:
+        """Sprint 15 Session 5: sum of `quantity` across every OTHER tenant's
+        DRAFT invoice item referencing this trip catch - the "other draft
+        demand" a competing draft could still claim before this one is
+        issued. One aggregate query, mirroring
+        `TripCatchRepository.aggregate_stock_by_fish`'s style
+        (`app/modules/trip_catches/repository.py`), not a per-invoice loop.
+
+        Status lives on `Invoice`, not `InvoiceItem`, so this must join -
+        unlike every other query in this file, which reads `InvoiceItem`
+        alone. `Invoice.deleted_at.is_(None)` is required in addition to
+        `status == DRAFT`: deleting an invoice only sets `deleted_at`, it
+        never flips `status`, so a soft-deleted draft's items would
+        otherwise still count (see `Invoice`/`InvoiceItem` model docstrings).
+        `exclude_invoice_id` is the invoice currently being viewed/edited -
+        its own items are demand from THIS invoice, not "other" demand, and
+        must never be counted here regardless of which specific item is
+        being added or edited (Sprint 15 Session 5 TASKS.md: exclusion is by
+        invoice, not by item)."""
+        conditions = [
+            InvoiceItem.trip_catch_id == trip_catch_id,
+            InvoiceItem.tenant_id == tenant_id,
+            InvoiceItem.deleted_at.is_(None),
+            Invoice.status == InvoiceStatus.DRAFT,
+            Invoice.deleted_at.is_(None),
+        ]
+        if exclude_invoice_id is not None:
+            conditions.append(Invoice.id != exclude_invoice_id)
+
+        result = await self._session.execute(
+            select(func.coalesce(func.sum(InvoiceItem.quantity), 0))
+            .select_from(InvoiceItem)
+            .join(Invoice, Invoice.id == InvoiceItem.invoice_id)
+            .where(*conditions)
+        )
+        return result.scalar_one()
+
+    async def list_invoices_referencing_trip_catch(
+        self,
+        trip_catch_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        *,
+        exclude_invoice_id: uuid.UUID | None,
+    ) -> Sequence[Row[Any]]:
+        """Sprint 15 Session 6: every OTHER non-cancelled, non-deleted
+        invoice referencing this trip catch, one row per invoice (not per
+        item - an invoice with two items against the same catch would
+        otherwise appear twice with a misleadingly split quantity). Unlike
+        `sum_other_draft_quantity` (a scalar aggregate that deliberately
+        throws away row identity), this returns each invoice's own id/
+        number/status/date/company_id/quantity - a genuinely different
+        query shape, not a parameter tweak to the same one.
+
+        Ordered with actual stock consumers (ISSUED/PARTIALLY_PAID/PAID)
+        before pending DRAFTs, most recent first within each group - the
+        UI wants to show "what likely consumed this stock" ahead of "what
+        else merely wants it." `company_id` is returned, not a name -
+        resolving names in bulk is CompanyService's job (ARCHITECTURE.md
+        §2), avoiding an N+1 here."""
+        conditions = [
+            InvoiceItem.trip_catch_id == trip_catch_id,
+            InvoiceItem.tenant_id == tenant_id,
+            InvoiceItem.deleted_at.is_(None),
+            Invoice.status.in_(_CONFLICT_INVOICE_STATUSES),
+            Invoice.deleted_at.is_(None),
+        ]
+        if exclude_invoice_id is not None:
+            conditions.append(Invoice.id != exclude_invoice_id)
+
+        is_draft = case((Invoice.status == InvoiceStatus.DRAFT, 1), else_=0)
+
+        result = await self._session.execute(
+            select(
+                Invoice.id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.invoice_date,
+                Invoice.company_id,
+                func.sum(InvoiceItem.quantity).label("quantity"),
+            )
+            .select_from(InvoiceItem)
+            .join(Invoice, Invoice.id == InvoiceItem.invoice_id)
+            .where(*conditions)
+            .group_by(
+                Invoice.id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.invoice_date,
+                Invoice.company_id,
+            )
+            .order_by(is_draft.asc(), Invoice.invoice_date.desc())
+        )
+        return result.all()
+
+    async def get_trip_catch_invoice_usage(
+        self,
+        trip_catch_ids: Sequence[uuid.UUID],
+        tenant_id: uuid.UUID,
+        *,
+        exclude_invoice_id: uuid.UUID | None = None,
+    ) -> Sequence[Row[Any]]:
+        """Sprint 15 Session 7: batched invoice-usage summary for the Fish
+        Stock detail page's Contributing Catches table - one query for every
+        trip catch shown on that page, never one request per row (N+1).
+        Returns a row only for a trip catch with at least one qualifying
+        invoice; a trip catch absent from the result has zero usage - the
+        same "missing means none" contract FishService.get_many_by_ids and
+        CompanyService.get_names_by_ids already use for bulk lookups, so
+        callers must not treat an absent id as an error.
+
+        Same status/soft-delete filtering as
+        list_invoices_referencing_trip_catch (_CONFLICT_INVOICE_STATUSES,
+        excluding CANCELLED and soft-deleted), but grouped by trip_catch_id
+        rather than by invoice - the Fish Stock page only needs a count and
+        two quantity totals per catch, never per-invoice identity, so this
+        is a distinct aggregate query, not a variation of that one.
+        `invoice_count` counts distinct invoices (not items) - an invoice
+        with two items against the same catch must still count once.
+
+        `exclude_invoice_id` (Sprint 15 Session 8): when given, that
+        invoice's own items are excluded from every count/sum entirely -
+        reused by InvoiceService.get_invoice_trip_catch_conflicts so the
+        Invoice Detail page's "Other Invoice Usage" indicator never counts
+        the invoice being viewed as its own conflict. Session 7's Fish Stock
+        callers never pass this, leaving their behavior unchanged."""
+        if not trip_catch_ids:
+            return []
+
+        conditions = [
+            InvoiceItem.trip_catch_id.in_(trip_catch_ids),
+            InvoiceItem.tenant_id == tenant_id,
+            InvoiceItem.deleted_at.is_(None),
+            Invoice.status.in_(_CONFLICT_INVOICE_STATUSES),
+            Invoice.deleted_at.is_(None),
+        ]
+        if exclude_invoice_id is not None:
+            conditions.append(Invoice.id != exclude_invoice_id)
+
+        result = await self._session.execute(
+            select(
+                InvoiceItem.trip_catch_id,
+                func.count(func.distinct(Invoice.id)).label("invoice_count"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (Invoice.status == InvoiceStatus.DRAFT, InvoiceItem.quantity),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("draft_quantity"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (Invoice.status != InvoiceStatus.DRAFT, InvoiceItem.quantity),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("consumed_quantity"),
+            )
+            .select_from(InvoiceItem)
+            .join(Invoice, Invoice.id == InvoiceItem.invoice_id)
+            .where(*conditions)
+            .group_by(InvoiceItem.trip_catch_id)
+        )
+        return result.all()
 
     async def ensure_sequence_row(
         self, tenant_id: uuid.UUID, prefix: str, fiscal_year: str
