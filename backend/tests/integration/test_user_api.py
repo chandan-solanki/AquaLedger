@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.constants import AccountStatus
-from app.modules.auth.models import Role, Tenant, User
+from app.modules.auth.models import AuditLog, Role, Tenant, User
 from app.modules.auth.security import create_access_token, hash_password
 
 SUPER_ADMIN_EMAIL = "admin@fisherp.local"
@@ -734,6 +734,169 @@ class TestUpdateUserStatus:
             headers=other_headers,
         )
         assert response.status_code == 404
+
+
+class TestResetPassword:
+    async def test_requires_authentication(self, client: AsyncClient) -> None:
+        response = await client.patch(
+            f"/api/v1/users/{uuid.uuid4()}/password", json={"new_password": "NewStrong@1"}
+        )
+        assert response.status_code == 401
+
+    async def test_requires_permission(self, client: AsyncClient, db_session: AsyncSession) -> None:
+        tenant_id = await _admin_tenant_id(client)
+        headers, _ = await _make_user_headers(db_session, tenant_id, [])
+        response = await client.patch(
+            f"/api/v1/users/{uuid.uuid4()}/password",
+            json={"new_password": "NewStrong@1"},
+            headers=headers,
+        )
+        assert response.status_code == 403
+
+    async def test_happy_path_forces_change_and_revokes_sessions(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        admin_headers = await _admin_headers(client)
+        tenant_id = await _admin_tenant_id(client)
+        role_id = await _get_role_id(db_session, tenant_id, "accountant")
+        created = await _create_user(client, admin_headers, role_id)
+
+        target_login = await _login(client, email=created["email"], password=_NEW_USER_PASSWORD)
+        refresh_token = target_login["refresh_token"]
+
+        response = await client.patch(
+            f"/api/v1/users/{created['id']}/password",
+            json={"new_password": "NewStrong@1"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["id"] == created["id"]
+
+        # The old password no longer works.
+        old_password_login = await client.post(
+            "/api/v1/auth/login",
+            json={"email": created["email"], "password": _NEW_USER_PASSWORD},
+        )
+        assert old_password_login.status_code == 401
+
+        # The new one does, and must_change_password is true again - same
+        # forced-first-login behavior as a brand-new account.
+        new_password_login = await _login(client, email=created["email"], password="NewStrong@1")
+        assert new_password_login["must_change_password"] is True
+
+        # The session that existed before the reset was revoked.
+        refresh_response = await client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": refresh_token}
+        )
+        assert refresh_response.status_code == 401
+
+    async def test_weak_new_password_is_rejected(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers = await _admin_headers(client)
+        tenant_id = await _admin_tenant_id(client)
+        role_id = await _get_role_id(db_session, tenant_id, "accountant")
+        created = await _create_user(client, headers, role_id)
+
+        response = await client.patch(
+            f"/api/v1/users/{created['id']}/password",
+            json={"new_password": "weak"},
+            headers=headers,
+        )
+        assert response.status_code == 422
+        assert "new_password" in response.json()["error"]["field_errors"]
+
+    async def test_cannot_reset_own_password(self, client: AsyncClient) -> None:
+        headers = await _admin_headers(client)
+        admin_id = await _admin_user_id(client)
+
+        response = await client.patch(
+            f"/api/v1/users/{admin_id}/password",
+            json={"new_password": "NewStrong@1"},
+            headers=headers,
+        )
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "CANNOT_RESET_OWN_PASSWORD"
+
+    async def test_non_superuser_cannot_reset_a_super_admin_users_password(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        admin_headers = await _admin_headers(client)
+        tenant_id = await _admin_tenant_id(client)
+        super_admin_role_id = await _get_role_id(db_session, tenant_id, "super_admin")
+        target = await _create_user(client, admin_headers, super_admin_role_id)
+
+        actor_headers, _ = await _make_user_headers(
+            db_session, tenant_id, ["user:manage"], is_superuser=False
+        )
+        response = await client.patch(
+            f"/api/v1/users/{target['id']}/password",
+            json={"new_password": "NewStrong@1"},
+            headers=actor_headers,
+        )
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "SUPER_ADMIN_ROLE_PROTECTED"
+
+    async def test_superuser_can_reset_a_super_admin_users_password(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        admin_headers = await _admin_headers(client)
+        tenant_id = await _admin_tenant_id(client)
+        super_admin_role_id = await _get_role_id(db_session, tenant_id, "super_admin")
+        target = await _create_user(client, admin_headers, super_admin_role_id)
+
+        response = await client.patch(
+            f"/api/v1/users/{target['id']}/password",
+            json={"new_password": "NewStrong@1"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200
+
+    async def test_other_tenants_user_password_reset_is_404(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers = await _admin_headers(client)
+        tenant_id = await _admin_tenant_id(client)
+        role_id = await _get_role_id(db_session, tenant_id, "accountant")
+        created = await _create_user(client, headers, role_id)
+
+        other_tenant = Tenant(name="Other Reset Co", slug=f"other-reset-{uuid.uuid4().hex[:8]}")
+        db_session.add(other_tenant)
+        await db_session.commit()
+        other_headers, _ = await _make_user_headers(db_session, other_tenant.id, ["user:manage"])
+
+        response = await client.patch(
+            f"/api/v1/users/{created['id']}/password",
+            json={"new_password": "NewStrong@1"},
+            headers=other_headers,
+        )
+        assert response.status_code == 404
+
+    async def test_creates_audit_log_without_the_new_password_value(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers = await _admin_headers(client)
+        tenant_id = await _admin_tenant_id(client)
+        role_id = await _get_role_id(db_session, tenant_id, "accountant")
+        created = await _create_user(client, headers, role_id)
+
+        response = await client.patch(
+            f"/api/v1/users/{created['id']}/password",
+            json={"new_password": "NewStrong@1"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        log = (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.entity_id == uuid.UUID(created["id"]),
+                    AuditLog.action == "user_password_reset",
+                )
+            )
+        ).scalar_one()
+        assert log.changes is None
+        assert "NewStrong@1" not in str(log.__dict__)
 
 
 class TestRoleOptions:

@@ -28,6 +28,7 @@ export function mapUserProfile(profile: BackendUserProfile, mustChangePassword =
     lastLoginAt: profile.last_login_at,
     roles: profile.roles,
     permissions: profile.permissions,
+    avatarUrl: profile.avatar_url,
     // Only the login/refresh response carries this flag; /auth/me doesn't,
     // so a page-refresh session restore can't recover it and defaults to
     // false (the safer default — this session doesn't build the

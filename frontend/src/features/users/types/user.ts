@@ -107,3 +107,8 @@ export interface UserUpdateRequest {
 export interface UserStatusUpdateRequest {
   status: UserStatusAction;
 }
+
+/** Request body for PATCH /users/{id}/password (admin-triggered reset). */
+export interface UserPasswordResetRequest {
+  new_password: string;
+}

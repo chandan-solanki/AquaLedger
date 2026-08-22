@@ -24,6 +24,8 @@ export interface User {
   roles: string[];
   permissions: string[];
   mustChangePassword: boolean;
+  /** Relative path to GET /api/profile/avatar, or null if no avatar is uploaded - never a raw storage key. */
+  avatarUrl: string | null;
 }
 
 /**

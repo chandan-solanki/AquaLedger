@@ -58,6 +58,13 @@ export const userService = {
     return mapBackendUser(data);
   },
 
+  async resetUserPassword(id: string, newPassword: string): Promise<ManagedUser> {
+    const { data } = await bffClient.patch<BackendUser>(`/users/${id}/password`, {
+      new_password: newPassword,
+    });
+    return mapBackendUser(data);
+  },
+
   async listRoleOptions(): Promise<RoleSummary[]> {
     const { data } = await bffClient.get<RoleSummary[]>("/users/roles");
     return data;

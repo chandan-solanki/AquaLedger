@@ -11,6 +11,9 @@ from app.db.base import Base
 from app.modules.auth import models as auth_models  # noqa: F401
 from app.modules.boats import models as boats_models  # noqa: F401
 from app.modules.companies import models as companies_models  # noqa: F401
+from app.modules.company_profile import models as company_profile_models  # noqa: F401
+from app.modules.delivery_challans import models as delivery_challans_models  # noqa: F401
+from app.modules.documents import models as documents_models  # noqa: F401
 from app.modules.fish import models as fish_models  # noqa: F401
 from app.modules.invoices import models as invoices_models  # noqa: F401
 from app.modules.payments import models as payments_models  # noqa: F401

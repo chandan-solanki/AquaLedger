@@ -136,10 +136,9 @@ class UserCreateRequest(BaseModel):
 class UserUpdateRequest(BaseModel):
     """Partial update - only fields present in the request body are changed.
 
-    No password field here - admin-triggered password resets are not
-    supported by the existing architecture (only self-service
-    /auth/change-password exists); status changes go through
-    PATCH /users/{id}/status, not this endpoint.
+    No password field here - an admin-triggered reset goes through the
+    dedicated PATCH /users/{id}/password (UserPasswordResetRequest) instead,
+    not this endpoint; status changes go through PATCH /users/{id}/status.
     """
 
     model_config = ConfigDict(
@@ -155,6 +154,18 @@ class UserUpdateRequest(BaseModel):
     _check_email = field_validator("email")(_validate_optional_email)
     _check_username = field_validator("username")(_validate_optional_username)
     _check_phone = field_validator("phone")(_validate_phone)
+
+
+class UserPasswordResetRequest(BaseModel):
+    """Admin-triggered reset of another user's password. Forces
+    must_change_password on their next login by clearing password_changed_at
+    - the same initial-password behavior UserCreateRequest already gives a
+    brand-new account - and immediately revokes all of their existing
+    sessions (see UserService.reset_password)."""
+
+    model_config = ConfigDict(json_schema_extra={"example": {"new_password": "TempPass@123"}})
+
+    new_password: str = Field(min_length=8, max_length=128, examples=["TempPass@123"])
 
 
 class UserStatusUpdateRequest(BaseModel):

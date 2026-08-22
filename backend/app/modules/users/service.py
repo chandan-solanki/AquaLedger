@@ -15,6 +15,7 @@ from app.modules.auth.security import hash_password, password_policy_violations
 from app.modules.users.exceptions import (
     CannotDeactivateLastAdminError,
     CannotDeactivateSelfError,
+    CannotResetOwnPasswordError,
     DuplicateUserEmailError,
     DuplicateUsernameError,
     RoleNotFoundError,
@@ -221,6 +222,51 @@ class UserService:
 
         return await self._load_response(user_id, tenant_id)
 
+    async def reset_password(
+        self,
+        user_id: uuid.UUID,
+        new_password: str,
+        *,
+        tenant_id: uuid.UUID,
+        actor: User,
+        ctx: RequestContext,
+    ) -> UserResponse:
+        user = await self._get_or_raise(user_id, tenant_id)
+
+        if user.id == actor.id:
+            raise CannotResetOwnPasswordError(
+                "Use Change Password in your own profile to change your own password"
+            )
+        self._guard_super_admin_password_reset(user, actor)
+
+        violations = password_policy_violations(new_password)
+        if violations:
+            raise ValidationError(
+                "Password does not meet policy requirements",
+                field_errors={"new_password": violations},
+            )
+
+        user.password_hash = hash_password(new_password)
+        # Cleared on purpose, mirroring create(): AuthService treats a null
+        # password_changed_at as must_change_password=True on next login.
+        user.password_changed_at = None
+        # A reset is often prompted by a lost/compromised password - any
+        # session started under the old one should not survive it, same
+        # reasoning as set_status's deactivation branch.
+        await self._auth_repo.revoke_all_for_user(user.id)
+        await self._auth_repo.add_audit_log(
+            tenant_id=tenant_id,
+            user_id=actor.id,
+            action="user_password_reset",
+            entity_id=user.id,
+            ip_address=ctx.ip,
+            user_agent=ctx.user_agent,
+            request_id=ctx.request_id,
+        )
+        await self._session.commit()
+
+        return await self._load_response(user_id, tenant_id)
+
     async def list_role_options(self, *, tenant_id: uuid.UUID, actor: User) -> list[RoleSummary]:
         roles = await self._repo.list_roles(tenant_id)
         if not actor.is_superuser:
@@ -255,6 +301,15 @@ class UserService:
         if not actor.is_superuser and any(role.name == SUPER_ADMIN_ROLE for role in user.roles):
             raise SuperAdminRoleProtectedError(
                 "Only a superuser can change a super_admin user's role"
+            )
+
+    @staticmethod
+    def _guard_super_admin_password_reset(user: User, actor: User) -> None:
+        if not actor.is_superuser and (
+            user.is_superuser or any(role.name == SUPER_ADMIN_ROLE for role in user.roles)
+        ):
+            raise SuperAdminRoleProtectedError(
+                "Only a superuser can reset a super_admin user's password"
             )
 
     @staticmethod

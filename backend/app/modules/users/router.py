@@ -14,6 +14,7 @@ from app.modules.users.schemas import (
     RoleSummary,
     UserCreateRequest,
     UserListParams,
+    UserPasswordResetRequest,
     UserResponse,
     UserStatusUpdateRequest,
     UserUpdateRequest,
@@ -178,6 +179,46 @@ async def update_user(
     return await service.update(
         user_id,
         payload,
+        tenant_id=current_user.tenant_id,
+        actor=current_user,
+        ctx=build_request_context(request),
+    )
+
+
+@router.patch(
+    "/{user_id}/password",
+    response_model=UserResponse,
+    summary="Reset a user's password",
+    description=(
+        "Admin-triggered reset of another user's password: sets the given "
+        "password and forces the account to change it again on next login "
+        "(must_change_password), and immediately revokes all of that user's "
+        "existing sessions. You cannot reset your own password this way - "
+        "use POST /auth/change-password instead. Resetting a super_admin "
+        "user's password requires the caller to be a superuser too."
+    ),
+    responses={
+        **_COMMON_ERROR_RESPONSES,
+        **_NOT_FOUND_RESPONSE,
+        422: {
+            "model": ErrorResponse,
+            "description": (
+                "Cannot reset your own password here, or the new password fails the password policy"
+            ),
+        },
+    },
+    dependencies=[Depends(require_permission(USER_MANAGE_PERMISSION))],
+)
+async def reset_user_password(
+    user_id: uuid.UUID,
+    payload: UserPasswordResetRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    service: UserService = Depends(get_user_service),
+) -> UserResponse:
+    return await service.reset_password(
+        user_id,
+        payload.new_password,
         tenant_id=current_user.tenant_id,
         actor=current_user,
         ctx=build_request_context(request),

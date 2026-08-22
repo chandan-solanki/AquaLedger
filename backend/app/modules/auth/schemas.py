@@ -58,6 +58,10 @@ class UserProfileResponse(BaseModel):
     last_login_at: datetime | None
     roles: list[str]
     permissions: list[str]
+    # Relative path to GET /api/profile/avatar, or null if no avatar is
+    # uploaded - never a raw storage key (Sprint 16, mirrors
+    # CompanyProfileResponse.logo_url exactly).
+    avatar_url: str | None = None
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -73,6 +77,7 @@ class UserProfileResponse(BaseModel):
                 "last_login_at": "2026-07-19T17:28:35.848386Z",
                 "roles": ["super_admin"],
                 "permissions": ["audit_log:view", "invoice:issue", "user:manage"],
+                "avatar_url": None,
             }
         }
     )
@@ -106,6 +111,7 @@ class TokenResponse(BaseModel):
                     "last_login_at": "2026-07-19T17:28:35.848386Z",
                     "roles": ["super_admin"],
                     "permissions": ["audit_log:view", "invoice:issue", "user:manage"],
+                    "avatar_url": None,
                 },
             }
         }

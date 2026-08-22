@@ -1,6 +1,6 @@
 "use client";
 
-import { Ban, CircleCheck, Pencil, Users as UsersIcon } from "lucide-react";
+import { Ban, CircleCheck, KeyRound, Pencil, Users as UsersIcon } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
@@ -13,9 +13,13 @@ import { DetailPageTemplate } from "@/components/templates/detail-page-template"
 import { Badge } from "@/components/ui/badge";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { usePermissions } from "@/features/auth/hooks/use-permissions";
+import { ResetPasswordDialog } from "@/features/users/components/reset-password-dialog";
 import { USER_STATUS_BADGE_VARIANT, USER_STATUS_LABELS } from "@/features/users/constants/user-status";
+import { useResetUserPassword } from "@/features/users/hooks/use-reset-user-password";
 import { useUpdateUserStatus } from "@/features/users/hooks/use-update-user-status";
 import { useUser } from "@/features/users/hooks/use-user";
+import type { UserPasswordResetFormValues } from "@/features/users/schemas/user-form-schema";
+import { toastSuccess } from "@/lib/toast";
 import { normalizeApiError } from "@/utils/api-error";
 import { formatDateTime } from "@/utils/format-date";
 
@@ -23,9 +27,8 @@ const USER_MANAGE_PERMISSION = "user:manage";
 
 /**
  * Read-only User record view (identity + role + status), with
- * Activate/Deactivate as the one supported mutation from this page - editing
- * identity/role fields goes through the Edit page, and there is no
- * admin-triggered password reset (see UserUpdateRequest's doc comment).
+ * Activate/Deactivate and Reset Password as the supported mutations from
+ * this page - editing identity/role fields goes through the Edit page.
  */
 export function UserDetailPage() {
   const params = useParams<{ id: string }>();
@@ -33,9 +36,11 @@ export function UserDetailPage() {
   const { hasPermission } = usePermissions();
   const currentUser = useCurrentUser();
   const [isStatusDialogOpen, setIsStatusDialogOpen] = useState(false);
+  const [isResetPasswordDialogOpen, setIsResetPasswordDialogOpen] = useState(false);
 
   const userQuery = useUser(userId);
   const updateUserStatus = useUpdateUserStatus();
+  const resetUserPassword = useResetUserPassword();
 
   if (!hasPermission(USER_MANAGE_PERMISSION)) {
     return (
@@ -51,6 +56,16 @@ export function UserDetailPage() {
   const isDeactivating = user?.status !== "inactive";
   const nextStatus = isDeactivating ? "inactive" : "active";
   const isSelf = user?.id === currentUser?.id;
+  // Mirrors the backend's own guard (UserService._guard_super_admin_password_reset)
+  // so the button isn't offered for a click that's guaranteed to 403.
+  const cannotResetSuperAdmin = Boolean(user?.isSuperuser) && !currentUser?.isSuperuser;
+
+  async function handleResetPassword(values: UserPasswordResetFormValues) {
+    if (!user) return;
+    await resetUserPassword.mutateAsync({ id: user.id, newPassword: values.new_password });
+    toastSuccess(`${user.fullName}'s password was reset.`);
+    setIsResetPasswordDialogOpen(false);
+  }
 
   return (
     <DetailPageTemplate
@@ -69,6 +84,12 @@ export function UserDetailPage() {
                 icon: isDeactivating ? Ban : CircleCheck,
                 onClick: () => setIsStatusDialogOpen(true),
                 disabled: isDeactivating && isSelf,
+              },
+              {
+                label: "Reset Password",
+                icon: KeyRound,
+                onClick: () => setIsResetPasswordDialogOpen(true),
+                disabled: isSelf || cannotResetSuperAdmin,
               },
             ]
           : undefined
@@ -135,6 +156,15 @@ export function UserDetailPage() {
               { onSuccess: () => setIsStatusDialogOpen(false) }
             )
           }
+        />
+      )}
+
+      {user && (
+        <ResetPasswordDialog
+          open={isResetPasswordDialogOpen}
+          onOpenChange={setIsResetPasswordDialogOpen}
+          userName={user.fullName}
+          onSubmit={handleResetPassword}
         />
       )}
     </DetailPageTemplate>

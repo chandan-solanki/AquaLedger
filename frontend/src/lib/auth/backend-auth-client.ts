@@ -25,6 +25,7 @@ export interface BackendUserProfile {
   last_login_at: string | null;
   roles: string[];
   permissions: string[];
+  avatar_url: string | null;
 }
 
 export interface BackendTokenResponse {

@@ -33,6 +33,13 @@ settings = get_settings()
 # respect to whether the email exists (anti user-enumeration, ARCHITECTURE §8.2).
 _DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
 
+# The self-service avatar module (app.modules.profile) owns avatar upload/
+# delete; this is just the fixed, ID-less route the frontend fetches once
+# avatar_storage_key is set - same relationship as CompanyProfileService's
+# own `_LOGO_URL_PATH`. Kept as a bare string (not an import from
+# app.modules.profile) so auth never depends on a module built on top of it.
+_AVATAR_URL_PATH = "/profile/avatar"
+
 
 class AuthService:
     def __init__(self, session: AsyncSession) -> None:
@@ -233,4 +240,5 @@ class AuthService:
             last_login_at=user.last_login_at,
             roles=roles,
             permissions=permissions,
+            avatar_url=_AVATAR_URL_PATH if user.avatar_storage_key else None,
         )

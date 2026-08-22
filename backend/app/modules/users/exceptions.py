@@ -21,6 +21,14 @@ class CannotDeactivateSelfError(BusinessRuleError):
     code = "CANNOT_DEACTIVATE_SELF"
 
 
+class CannotResetOwnPasswordError(BusinessRuleError):
+    """An admin must use self-service POST /auth/change-password for their
+    own account - PATCH /users/{id}/password is for resetting SOMEONE
+    ELSE's password, same self-vs-other split as CannotDeactivateSelfError."""
+
+    code = "CANNOT_RESET_OWN_PASSWORD"
+
+
 class CannotDeactivateLastAdminError(BusinessRuleError):
     code = "CANNOT_DEACTIVATE_LAST_ADMIN"
 

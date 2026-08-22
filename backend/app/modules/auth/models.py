@@ -63,6 +63,14 @@ class User(TimestampMixin, Base):
     password_changed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Avatar: only a storage key + its content-type is kept here - the bytes
+    # themselves live in StorageService (app.core.document_engine.storage),
+    # never in this table, matching company_profiles.logo_storage_key
+    # (Sprint 14) exactly.
+    avatar_storage_key: Mapped[str | None] = mapped_column(String(500))
+    avatar_content_type: Mapped[str | None] = mapped_column(String(50))
+    avatar_uploaded_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
     tenant: Mapped["Tenant"] = relationship(back_populates="users")
     user_roles: Mapped[list["UserRole"]] = relationship(
         back_populates="user", foreign_keys="UserRole.user_id"

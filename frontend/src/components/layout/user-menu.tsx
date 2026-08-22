@@ -1,7 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { LogOut, Palette, Settings, User } from "lucide-react";
-import { toast } from "sonner";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -17,16 +17,17 @@ import { useAuth } from "@/features/auth/hooks/use-auth";
 import { useCurrentUser } from "@/features/auth/hooks/use-current-user";
 import { getInitials } from "@/utils/get-initials";
 
-// Profile / Notification Preferences / Appearance are placeholders this
-// session (05_PAGE_CATALOG.md §14 builds the real pages) — only Logout is
-// wired to real behavior.
-function comingSoon(feature: string) {
-  toast.info(`${feature} is coming soon.`);
-}
+// Every item below now navigates to a real page: Profile → /profile
+// (Session 1), Notification Preferences → /profile/notifications
+// (Session 4, an honest "nothing to configure yet" page - no notification
+// delivery mechanism exists to have preferences over), Appearance →
+// /profile/appearance (Session 5, a settings UI over the same next-themes
+// mechanism the topbar's ThemeSwitcher already uses).
 
 export function UserMenu() {
   const user = useCurrentUser();
   const { logout } = useAuth();
+  const router = useRouter();
 
   if (!user) return null;
 
@@ -48,15 +49,15 @@ export function UserMenu() {
           <span className="truncate text-xs font-normal text-muted-foreground">{user.email}</span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => comingSoon("Profile")}>
+        <DropdownMenuItem onClick={() => router.push("/profile")}>
           <User />
           <span>Profile</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => comingSoon("Notification preferences")}>
+        <DropdownMenuItem onClick={() => router.push("/profile/notifications")}>
           <Settings />
           <span>Notification Preferences</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => comingSoon("Appearance settings")}>
+        <DropdownMenuItem onClick={() => router.push("/profile/appearance")}>
           <Palette />
           <span>Appearance</span>
         </DropdownMenuItem>

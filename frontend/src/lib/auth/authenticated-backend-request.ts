@@ -82,6 +82,19 @@ async function performAuthenticatedRequest<T>(
     }
     if (response.ok) return await parse(response);
     if (response.status !== 401) throw await toBackendAuthError(response);
+
+    const initialAuthError = await toBackendAuthError(response);
+    if (initialAuthError.apiError.code === "INVALID_CREDENTIALS") {
+      // A 401 here doesn't always mean the access token is stale - the
+      // caller's own submitted secret can be wrong (e.g. /auth/change-
+      // password's current_password check) while the session itself is
+      // perfectly valid. Refreshing and retrying would just repeat the
+      // same rejection while needlessly rotating the refresh token, and
+      // the retry-still-401 branch below would then clear a valid
+      // session's cookies - logging the user out for typing their current
+      // password wrong (Sprint 16 Session 3).
+      throw initialAuthError;
+    }
   }
 
   const refreshToken = await getRefreshToken();

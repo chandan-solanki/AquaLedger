@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import type { ManagedUser, UserCreateRequest, UserUpdateRequest } from "@/features/users/types/user";
+import type {
+  ManagedUser,
+  UserCreateRequest,
+  UserPasswordResetRequest,
+  UserUpdateRequest,
+} from "@/features/users/types/user";
 
 // Mirrors the backend's exact checks (app/modules/users/schemas.py,
 // app/modules/auth/security.py's password_policy_violations) so the form
@@ -35,7 +40,7 @@ const phoneField = z
     "Phone must be 7-15 digits, optionally prefixed with +"
   );
 
-const passwordField = z
+export const passwordField = z
   .string()
   .min(8, "Password must be at least 8 characters")
   .refine((value) => /[A-Z]/.test(value), "Password must contain an uppercase letter")
@@ -81,8 +86,9 @@ export function toUserCreateRequestPayload(values: UserCreateFormValues): UserCr
   };
 }
 
-/** No password field - admin-triggered password resets aren't supported by
- * the existing architecture (see UserUpdateRequest's own doc comment). */
+/** No password field here - an admin-triggered reset is a separate action,
+ * PATCH /users/{id}/password (see userPasswordResetFormSchema below), not
+ * part of this identity/role edit. */
 export const userEditFormSchema = z.object({
   full_name: z.string().trim().min(1, "Full name is required").max(255, "Must be 255 characters or fewer"),
   email: emailField,
@@ -112,4 +118,34 @@ export function toUserUpdatePayload(values: UserEditFormValues): UserUpdateReque
     phone: values.phone || undefined,
     role_id: values.role_id,
   };
+}
+
+/**
+ * PATCH /users/{id}/password: an admin sets the target's new password
+ * directly (same shape as PATCH /users/{id}/status - a small, single-
+ * purpose action, not a full form). `confirm_password` never leaves the
+ * browser - it exists only so a typo doesn't silently reset someone's
+ * account to a password the admin didn't mean to type.
+ */
+export const userPasswordResetFormSchema = z
+  .object({
+    new_password: passwordField,
+    confirm_password: z.string().min(1, "Please confirm the new password"),
+  })
+  .refine((values) => values.new_password === values.confirm_password, {
+    message: "Passwords do not match",
+    path: ["confirm_password"],
+  });
+
+export type UserPasswordResetFormValues = z.infer<typeof userPasswordResetFormSchema>;
+
+export const DEFAULT_USER_PASSWORD_RESET_FORM_VALUES: UserPasswordResetFormValues = {
+  new_password: "",
+  confirm_password: "",
+};
+
+export function toUserPasswordResetPayload(
+  values: UserPasswordResetFormValues
+): UserPasswordResetRequest {
+  return { new_password: values.new_password };
 }
