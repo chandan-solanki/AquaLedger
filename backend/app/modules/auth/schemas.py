@@ -55,6 +55,7 @@ class UserProfileResponse(BaseModel):
     phone: str | None
     status: AccountStatus
     is_superuser: bool
+    is_platform_admin: bool
     last_login_at: datetime | None
     roles: list[str]
     permissions: list[str]
@@ -74,6 +75,7 @@ class UserProfileResponse(BaseModel):
                 "phone": None,
                 "status": "active",
                 "is_superuser": True,
+                "is_platform_admin": False,
                 "last_login_at": "2026-07-19T17:28:35.848386Z",
                 "roles": ["super_admin"],
                 "permissions": ["audit_log:view", "invoice:issue", "user:manage"],
@@ -108,6 +110,7 @@ class TokenResponse(BaseModel):
                     "phone": None,
                     "status": "active",
                     "is_superuser": True,
+                    "is_platform_admin": False,
                     "last_login_at": "2026-07-19T17:28:35.848386Z",
                     "roles": ["super_admin"],
                     "permissions": ["audit_log:view", "invoice:issue", "user:manage"],

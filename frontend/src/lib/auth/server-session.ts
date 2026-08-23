@@ -25,6 +25,7 @@ export function mapUserProfile(profile: BackendUserProfile, mustChangePassword =
     phone: profile.phone,
     status: profile.status,
     isSuperuser: profile.is_superuser,
+    isPlatformAdmin: profile.is_platform_admin,
     lastLoginAt: profile.last_login_at,
     roles: profile.roles,
     permissions: profile.permissions,

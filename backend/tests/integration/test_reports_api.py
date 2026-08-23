@@ -1190,7 +1190,19 @@ class TestOutstandingReportHappyPath:
         )
 
         headers = await _admin_headers(client)
-        response = await client.get("/api/v1/reports/outstanding", headers=headers)
+        # Sprint 17 Session 7: `/reports/outstanding` is genuinely paginated
+        # (page_size defaults to 20, "Outstanding DESC, Then Name ASC") -
+        # the shared dev database can legitimately contain enough real
+        # companies with larger outstanding balances to push this test's
+        # own row off the default first page entirely. `q` (a real,
+        # documented filter - "case-insensitive search across the entity's
+        # name and code") narrows the result to just this company,
+        # deterministically, regardless of how much other legitimate data
+        # exists. `summary` is documented as always the full, unfiltered
+        # picture, so it's unaffected by this filter.
+        response = await client.get(
+            "/api/v1/reports/outstanding", params={"q": company.name}, headers=headers
+        )
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["entity_type"] == "customer"
@@ -1385,7 +1397,18 @@ class TestAgingReportHappyPath:
         )
 
         headers = await _admin_headers(client)
-        response = await client.get("/api/v1/reports/aging", headers=headers)
+        # Sprint 17 Session 7: `/reports/aging` is genuinely paginated
+        # (page_size defaults to 20) - the shared dev database can
+        # legitimately contain enough real companies to push this test's
+        # own row off the default first page entirely. `q` (a real,
+        # documented filter - "case-insensitive search across the entity's
+        # name and code") narrows the result to just this company,
+        # deterministically. Unlike the Outstanding Report, this endpoint's
+        # `summary` IS scoped to the filter too, so it remains a valid,
+        # nonzero total for this one company's own $1000 invoice.
+        response = await client.get(
+            "/api/v1/reports/aging", params={"q": company.name}, headers=headers
+        )
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["entity_type"] == "customer"

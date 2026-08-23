@@ -23,6 +23,18 @@ class AccountDisabledError(AuthenticationError):
     code = "ACCOUNT_DISABLED"
 
 
+class TenantSuspendedError(AuthenticationError):
+    """Sprint 17 Session 2 - the tenant, not the individual user, is
+    blocked. Deliberately distinct from AccountDisabledError so the error
+    code tells the caller which one happened."""
+
+    code = "TENANT_SUSPENDED"
+
+
+class TenantInactiveError(AuthenticationError):
+    code = "TENANT_INACTIVE"
+
+
 class UserNotFoundError(NotFoundError):
     """For future user-lookup-by-id endpoints (e.g. admin user management).
 

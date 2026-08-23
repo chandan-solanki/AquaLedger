@@ -2,11 +2,11 @@ import uuid
 from typing import Any
 
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.constants import AccountStatus
-from app.modules.auth.models import AuditLog, Role, Tenant, User
+from app.modules.auth.constants import ADMIN_ROLE, SUPER_ADMIN_ROLE, AccountStatus
+from app.modules.auth.models import AuditLog, Role, Tenant, User, UserRole
 from app.modules.auth.security import create_access_token, hash_password
 
 SUPER_ADMIN_EMAIL = "admin@fisherp.local"
@@ -61,6 +61,46 @@ async def _make_user_headers(
         subject=user.id, tenant_id=user.tenant_id, roles=["custom"], permissions=permissions
     )
     return {"Authorization": f"Bearer {token}"}, user
+
+
+async def _suspend_other_active_admins(
+    db_session: AsyncSession, tenant_id: uuid.UUID, *, exclude_user_id: uuid.UUID
+) -> None:
+    """Sprint 17 Session 6: deterministically constructs a true "last active
+    admin" scenario within this test's own rolled-back transaction. The
+    shared dev database legitimately contains other real is_superuser/admin
+    accounts in this tenant (created by manual testing) - without this,
+    `exclude_user_id` is not actually the tenant's last admin, so the real
+    CANNOT_DEACTIVATE_LAST_ADMIN guardrail correctly allows the deactivation
+    and the test's premise is false. Mirrors
+    UserRepository.count_other_active_admins' own predicate exactly. Never
+    touches `exclude_user_id` itself, and nothing here survives the test's
+    guaranteed rollback.
+    """
+    other_admin_ids = (
+        (
+            await db_session.execute(
+                select(User.id)
+                .select_from(User)
+                .outerjoin(UserRole, UserRole.user_id == User.id)
+                .outerjoin(Role, Role.id == UserRole.role_id)
+                .where(
+                    User.tenant_id == tenant_id,
+                    User.deleted_at.is_(None),
+                    User.status == AccountStatus.ACTIVE,
+                    User.id != exclude_user_id,
+                    or_(User.is_superuser.is_(True), Role.name.in_((ADMIN_ROLE, SUPER_ADMIN_ROLE))),
+                )
+                .distinct()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if other_admin_ids:
+        await db_session.execute(
+            update(User).where(User.id.in_(other_admin_ids)).values(status=AccountStatus.INACTIVE)
+        )
 
 
 async def _get_role_id(db_session: AsyncSession, tenant_id: uuid.UUID, name: str) -> uuid.UUID:
@@ -643,6 +683,7 @@ class TestUpdateUserStatus:
     ) -> None:
         tenant_id = await _admin_tenant_id(client)
         admin_id = await _admin_user_id(client)
+        await _suspend_other_active_admins(db_session, tenant_id, exclude_user_id=admin_id)
         actor_headers, _ = await _make_user_headers(
             db_session, tenant_id, ["user:manage"], is_superuser=False
         )

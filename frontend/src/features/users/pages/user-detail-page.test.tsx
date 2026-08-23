@@ -55,6 +55,7 @@ const CURRENT_USER = {
   phone: null,
   status: "active" as const,
   isSuperuser: false,
+  isPlatformAdmin: false,
   lastLoginAt: null,
   roles: ["admin"],
   permissions: ["user:manage"],

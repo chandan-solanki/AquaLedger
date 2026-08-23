@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.constants import AccountStatus
+from app.modules.auth.constants import DEFAULT_TENANT_SLUG, AccountStatus
 from app.modules.auth.models import AuditLog, Tenant, User
 from app.modules.auth.repository import AuthRepository
 from app.modules.auth.security import hash_password, hash_refresh_token
@@ -17,8 +17,14 @@ async def repo(db_session: AsyncSession) -> AuthRepository:
 
 
 async def _make_user(db_session: AsyncSession, **overrides: object) -> User:
-    tenant = (await db_session.execute(select(Tenant))).scalars().first()
-    assert tenant is not None
+    # Explicitly the default tenant, not "any" row (Sprint 17 Session 6) -
+    # a plain `.first()` is nondeterministic once other legitimate tenants
+    # exist in the shared dev database.
+    tenant = (
+        (await db_session.execute(select(Tenant).where(Tenant.slug == DEFAULT_TENANT_SLUG)))
+        .scalars()
+        .one()
+    )
     defaults: dict[str, object] = {
         "tenant_id": tenant.id,
         "email": "repo-test@fisherp.local",

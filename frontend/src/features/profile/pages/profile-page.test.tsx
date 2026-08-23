@@ -60,6 +60,7 @@ const USER = {
   phone: "9876543210",
   status: "active" as const,
   isSuperuser: false,
+  isPlatformAdmin: false,
   lastLoginAt: "2026-08-20T10:15:00.000Z",
   roles: ["accountant"],
   permissions: ["invoice:view"],

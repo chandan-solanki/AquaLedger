@@ -20,6 +20,10 @@ export interface User {
   phone: string | null;
   status: AccountStatus;
   isSuperuser: boolean;
+  /** Sprint 17: the platform-level authorization boundary, wholly separate
+   * from `isSuperuser` (a per-tenant RBAC bypass). Never derived from
+   * `isSuperuser`, role names, or permission codes — only this flag. */
+  isPlatformAdmin: boolean;
   lastLoginAt: string | null;
   roles: string[];
   permissions: string[];

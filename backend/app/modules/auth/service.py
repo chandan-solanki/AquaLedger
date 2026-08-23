@@ -6,14 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.request_context import RequestContext
 from app.core.config import get_settings
 from app.core.errors import RateLimitError, ValidationError
-from app.modules.auth.constants import AccountStatus
+from app.modules.auth.constants import AccountStatus, TenantStatus
 from app.modules.auth.exceptions import (
     AccountDisabledError,
     AccountLockedError,
     InvalidCredentialsError,
     InvalidTokenError,
+    TenantInactiveError,
+    TenantSuspendedError,
 )
-from app.modules.auth.models import User
+from app.modules.auth.models import Tenant, User
 from app.modules.auth.repository import AuthRepository
 from app.modules.auth.schemas import TokenResponse, UserProfileResponse
 from app.modules.auth.security import (
@@ -41,6 +43,24 @@ _DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
 _AVATAR_URL_PATH = "/profile/avatar"
 
 
+def raise_if_tenant_blocked(tenant: Tenant) -> None:
+    """The single place TenantStatus's enforcement semantics are defined
+    (Sprint 17 Session 2). Shared by login and refresh (both below) and by
+    get_current_user (auth/dependencies.py) - the three, and only, ways to
+    reach an authenticated route. Deliberately has no is_superuser or
+    is_platform_admin exemption: a suspended/inactive tenant blocks every
+    one of its users uniformly, including its own superusers and any
+    platform admin who happens to belong to it. The narrow guardrail against
+    ever reaching zero reachable platform admins lives at the tenant-status
+    *mutation* (app.modules.platform_admin.service), not here - this
+    function must stay a simple, unconditional gate.
+    """
+    if tenant.status == TenantStatus.SUSPENDED:
+        raise TenantSuspendedError("This tenant's access has been suspended")
+    if tenant.status == TenantStatus.INACTIVE:
+        raise TenantInactiveError("This tenant is no longer active")
+
+
 class AuthService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -58,6 +78,7 @@ class AuthService:
 
         now = datetime.now(UTC)
         self._raise_if_blocked(user, now)
+        raise_if_tenant_blocked(user.tenant)
 
         if not verify_password(password, user.password_hash):
             self._record_failed_login(user, now)
@@ -117,6 +138,7 @@ class AuthService:
         if user is None:
             raise InvalidTokenError("Invalid refresh token")
         self._raise_if_blocked(user, now)
+        raise_if_tenant_blocked(user.tenant)
 
         roles, permissions = await self._repo.get_roles_and_permissions(user.id)
         new_refresh_plain = generate_refresh_token()
@@ -237,6 +259,7 @@ class AuthService:
             phone=user.phone,
             status=AccountStatus(user.status),
             is_superuser=user.is_superuser,
+            is_platform_admin=user.is_platform_admin,
             last_login_at=user.last_login_at,
             roles=roles,
             permissions=permissions,

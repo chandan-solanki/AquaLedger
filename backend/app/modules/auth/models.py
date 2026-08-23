@@ -57,6 +57,14 @@ class User(TimestampMixin, Base):
         String(20), nullable=False, default=AccountStatus.ACTIVE
     )
     is_superuser: Mapped[bool] = mapped_column(default=False, nullable=False)
+    # Platform/vendor-level authority - deliberately separate from
+    # is_superuser (Sprint 17 Session 1 audit). is_superuser only bypasses
+    # RBAC permission checks *within this user's own tenant*; it has never
+    # crossed a tenant boundary anywhere in this codebase. is_platform_admin
+    # is checked exclusively by require_platform_admin() and must never be
+    # folded into require_permission/require_role's is_superuser bypass, and
+    # must never relax a repository's tenant_id filter.
+    is_platform_admin: Mapped[bool] = mapped_column(default=False, nullable=False)
     last_login_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

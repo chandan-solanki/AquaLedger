@@ -43,9 +43,49 @@ class TestRouterRegistration:
         assert purchase_router in included_originals
 
     def test_both_routers_now_carry_crud_endpoints(self) -> None:
-        # Suppliers: 5 CRUD endpoints (create/list/get/update/delete), still
-        # unchanged since Session 2. Purchase: those same 5 plus Session 3's
-        # 4 item endpoints (add/list/update/delete) plus Session 5's single
-        # post endpoint.
-        assert len(suppliers_router.routes) == 5
-        assert len(purchase_router.routes) == 10
+        """Explicit (method, path) checks (Sprint 17 Session 7), not a raw
+        route count. A count assertion breaks the moment any legitimate,
+        unrelated endpoint is added - e.g. `GET .../document` (PDF
+        generation, added on the purchase router after this test was last
+        updated) silently pushed the real total from 10 to 11 with no
+        indication of what actually changed. Checking for these specific
+        required (method, path) pairs instead fails clearly and
+        specifically if a real CRUD endpoint is ever removed, while
+        tolerating any future endpoint (document generation, posting,
+        etc.) this test isn't about.
+        """
+        suppliers_routes = {
+            (method, route.path) for route in suppliers_router.routes for method in route.methods
+        }
+        purchase_routes = {
+            (method, route.path) for route in purchase_router.routes for method in route.methods
+        }
+
+        required_supplier_routes = {
+            ("POST", "/suppliers"),
+            ("GET", "/suppliers"),
+            ("GET", "/suppliers/{supplier_id}"),
+            ("PUT", "/suppliers/{supplier_id}"),
+            ("DELETE", "/suppliers/{supplier_id}"),
+        }
+        # Purchase's 5 bill-level CRUD endpoints (create/list/get/update/
+        # delete, unchanged since Session 2), plus Session 3's 4 item
+        # endpoints (add/list/update/delete), plus Session 5's post
+        # endpoint - 10 required routes. `GET .../document` is a real,
+        # separately-tested 11th endpoint (PDF generation), deliberately
+        # not part of this CRUD-contract checklist.
+        required_purchase_routes = {
+            ("POST", "/purchase"),
+            ("GET", "/purchase"),
+            ("GET", "/purchase/{purchase_bill_id}"),
+            ("PUT", "/purchase/{purchase_bill_id}"),
+            ("DELETE", "/purchase/{purchase_bill_id}"),
+            ("POST", "/purchase/{purchase_bill_id}/items"),
+            ("GET", "/purchase/{purchase_bill_id}/items"),
+            ("PUT", "/purchase/{purchase_bill_id}/items/{item_id}"),
+            ("DELETE", "/purchase/{purchase_bill_id}/items/{item_id}"),
+            ("POST", "/purchase/{purchase_bill_id}/post"),
+        }
+
+        assert required_supplier_routes.issubset(suppliers_routes)
+        assert required_purchase_routes.issubset(purchase_routes)

@@ -63,10 +63,11 @@ export function AppSidebar() {
   const pathname = usePathname();
   const { permissions, user } = useAuth();
   const isSuperuser = user?.isSuperuser ?? false;
+  const isPlatformAdmin = user?.isPlatformAdmin ?? false;
 
   const items = useMemo(
-    () => filterNavigation(NAVIGATION, permissions, isSuperuser),
-    [permissions, isSuperuser]
+    () => filterNavigation(NAVIGATION, permissions, isSuperuser, isPlatformAdmin),
+    [permissions, isSuperuser, isPlatformAdmin]
   );
 
   return (

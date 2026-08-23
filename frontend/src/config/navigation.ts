@@ -15,6 +15,7 @@ import {
   Hourglass,
   KeyRound,
   LayoutDashboard,
+  Landmark,
   PackageCheck,
   Route,
   Scale,
@@ -41,6 +42,21 @@ export interface NavItem {
   /** Singular form, e.g. "Company" for "Companies" — used for "New {singular}" breadcrumb/page labels (03_INFORMATION_ARCHITECTURE.md §18). Omitted for items with no Create route. */
   singular?: string;
   permission?: string | string[];
+  /**
+   * Sprint 17: visible only to `user.isPlatformAdmin === true` — a strictly
+   * separate boundary from `permission`/`isSuperuser`, never satisfied by
+   * either. Reserved for the Platform Administration section; ordinary
+   * tenant-scoped nav items never set this.
+   */
+  platformOnly?: boolean;
+  /**
+   * Sprint 17 Session 5: the inverse of `platformOnly` — hides an otherwise
+   * ordinary (no `permission` gate) item specifically from a platform admin.
+   * Reserved for the tenant `/dashboard` item: it has no `permission` (every
+   * tenant role sees it) but is a dead, redirecting duplicate for a platform
+   * admin, who already has their own Dashboard under Platform Administration.
+   */
+  hiddenForPlatformAdmin?: boolean;
   children?: NavItem[];
 }
 
@@ -57,6 +73,7 @@ export const NAVIGATION: NavItem[] = [
     title: "Dashboard",
     icon: LayoutDashboard,
     href: "/dashboard",
+    hiddenForPlatformAdmin: true,
   },
   {
     id: "masters",
@@ -265,6 +282,32 @@ export const NAVIGATION: NavItem[] = [
         icon: Hash,
         href: "/settings/sequences",
         permission: "settings:manage",
+      },
+    ],
+  },
+  {
+    // Sprint 17: cross-tenant platform governance, distinct from ordinary
+    // per-tenant "Administration" above - gated by `platformOnly` (the
+    // `is_platform_admin` flag), never a permission code, since this isn't
+    // part of any tenant's own RBAC model.
+    id: "platform",
+    title: "Platform Administration",
+    icon: Landmark,
+    children: [
+      {
+        id: "platform-dashboard",
+        title: "Dashboard",
+        icon: LayoutDashboard,
+        href: "/platform/dashboard",
+        platformOnly: true,
+      },
+      {
+        id: "platform-tenants",
+        title: "Tenants",
+        icon: Building2,
+        href: "/platform/tenants",
+        singular: "Tenant",
+        platformOnly: true,
       },
     ],
   },

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exception_handlers import register_exception_handlers
 from app.db.session import get_db
-from app.modules.auth.constants import AccountStatus
+from app.modules.auth.constants import DEFAULT_TENANT_SLUG, AccountStatus
 from app.modules.auth.models import Tenant, User
 from app.modules.auth.permissions import require_permission, require_role
 from app.modules.auth.security import create_access_token, hash_password
@@ -68,8 +68,14 @@ async def _make_operator_user(db_session: AsyncSession) -> User:
     """A real, non-superuser DB row (needed by get_current_user's lookup),
     with hand-crafted token claims - no need to wire real role/permission
     seed data to control exactly what a test scenario grants."""
-    tenant = (await db_session.execute(select(Tenant))).scalars().first()
-    assert tenant is not None
+    # Explicitly the default tenant, not "any" row (Sprint 17 Session 6) -
+    # a plain `.first()` is nondeterministic once other legitimate tenants
+    # exist in the shared dev database.
+    tenant = (
+        (await db_session.execute(select(Tenant).where(Tenant.slug == DEFAULT_TENANT_SLUG)))
+        .scalars()
+        .one()
+    )
     user = User(
         tenant_id=tenant.id,
         email="operator-rbac-test@fisherp.local",
@@ -119,8 +125,11 @@ class TestRequirePermission:
     async def test_superuser_bypasses_permission_check(
         self, rbac_client: AsyncClient, db_session: AsyncSession
     ) -> None:
-        tenant = (await db_session.execute(select(Tenant))).scalars().first()
-        assert tenant is not None
+        tenant = (
+            (await db_session.execute(select(Tenant).where(Tenant.slug == DEFAULT_TENANT_SLUG)))
+            .scalars()
+            .one()
+        )
         superuser = User(
             tenant_id=tenant.id,
             email="superuser-rbac-test@fisherp.local",

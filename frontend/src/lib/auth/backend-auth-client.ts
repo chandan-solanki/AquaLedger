@@ -22,6 +22,7 @@ export interface BackendUserProfile {
   phone: string | null;
   status: AccountStatus;
   is_superuser: boolean;
+  is_platform_admin: boolean;
   last_login_at: string | null;
   roles: string[];
   permissions: string[];

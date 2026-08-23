@@ -13,6 +13,27 @@ SUPER_ADMIN_EMAIL = "admin@fisherp.local"
 SUPER_ADMIN_PASSWORD = "Admin@123"
 
 
+def _find_password_shaped_keys(value: object, path: str = "") -> list[str]:
+    """Recursively collects any JSON object key containing "password"
+    (Sprint 17 Session 6). Used instead of a raw substring search over the
+    whole response body, which a legitimate user's name or email can
+    trigger by coincidence (e.g. a real dev/QA user named "QA Password
+    Reset") - the actual security property worth testing is structural: no
+    password/password_hash *field* is ever serialized, independent of what
+    any string value happens to say."""
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            if "password" in str(key).lower():
+                found.append(child_path)
+            found.extend(_find_password_shaped_keys(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            found.extend(_find_password_shaped_keys(child, f"{path}[{index}]"))
+    return found
+
+
 async def _login(client: AsyncClient) -> dict[str, Any]:
     response = await client.post(
         "/api/v1/auth/login", json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PASSWORD}
@@ -221,8 +242,8 @@ class TestGetRole:
         await _create_user_with_role(client, headers, accountant.id)
 
         response = await client.get(f"/api/v1/roles/{accountant.id}", headers=headers)
-        body_text = response.text
-        assert "password" not in body_text.lower()
+        offending_keys = _find_password_shaped_keys(response.json())
+        assert not offending_keys, f"password-shaped field(s) found: {offending_keys}"
 
     async def test_unknown_id_is_404(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)

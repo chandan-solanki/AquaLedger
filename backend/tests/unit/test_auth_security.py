@@ -84,10 +84,20 @@ class TestAccessToken:
             decode_access_token("not-a-valid-jwt")
 
     def test_tampered_signature_raises_invalid(self) -> None:
+        # Sprint 17 Session 6: flipping the token's *last* character was
+        # intermittently flaky (~1 in 15 runs) - it's the final base64url
+        # character of a 32-byte HMAC-SHA256 signature, which is only
+        # 4-bits-significant (32*8 = 256 bits doesn't divide evenly into
+        # 6-bit base64 groups: 256 = 42*6 + 4). Some substitutions there
+        # only change the 2 non-significant trailing bits, decoding back to
+        # the exact same signature bytes - a false-negative "tamper" that
+        # never touches the actual signature at all. Position -2 is always
+        # a full, 6-bit-significant character for any 32-byte value, so
+        # flipping it deterministically changes the decoded signature bytes.
         token = create_access_token(
             subject=uuid.uuid4(), tenant_id=uuid.uuid4(), roles=[], permissions=[]
         )
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        tampered = token[:-2] + ("A" if token[-2] != "A" else "B") + token[-1]
         with pytest.raises(InvalidTokenError):
             decode_access_token(tampered)
 

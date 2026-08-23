@@ -44,3 +44,26 @@ def require_role(name: str) -> Callable[..., Awaitable[None]]:
             raise AuthorizationError(f"Missing required role: {name}")
 
     return _check
+
+
+async def require_platform_admin(current_user: User = Depends(get_current_user)) -> None:
+    """Route dependency: 403s unless the caller is a platform administrator.
+
+    Deliberately independent of require_permission/require_role and of
+    is_superuser (Sprint 17 Session 1 audit): is_superuser only bypasses
+    RBAC checks *within the caller's own tenant* and has never granted
+    cross-tenant access anywhere in this codebase. Folding platform
+    authority into that existing bypass would silently grant it to every
+    already-seeded tenant superuser the moment this flag shipped, which is
+    exactly the risk this dependency exists to avoid - a tenant superuser
+    gets no special treatment here and must be explicitly flagged
+    `is_platform_admin` like anyone else.
+
+    Reads `is_platform_admin` from the freshly-loaded `current_user` (a DB
+    row), not the JWT, matching is_superuser's precedent: revoking platform
+    authority takes effect on the caller's very next request rather than
+    waiting for their access token to expire.
+    """
+
+    if not current_user.is_platform_admin:
+        raise AuthorizationError("Platform administrator authority is required")

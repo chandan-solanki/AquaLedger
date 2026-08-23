@@ -11,7 +11,7 @@ from app.modules.auth.models import User
 from app.modules.auth.repository import AuthRepository
 from app.modules.auth.schemas import AccessTokenPayload
 from app.modules.auth.security import decode_access_token
-from app.modules.auth.service import AuthService
+from app.modules.auth.service import AuthService, raise_if_tenant_blocked
 
 # auto_error=False so a missing header raises our own consistent error
 # envelope instead of FastAPI's default 403 "Not authenticated".
@@ -39,6 +39,7 @@ async def get_current_user(
     if user.status == AccountStatus.LOCKED and user.locked_until:
         if user.locked_until > datetime.now(UTC):
             raise AccountLockedError("This account is temporarily locked. Please try again later")
+    raise_if_tenant_blocked(user.tenant)
 
     return user
 

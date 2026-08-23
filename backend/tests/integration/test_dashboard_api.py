@@ -220,12 +220,31 @@ class TestGetDashboardWidgets:
     async def test_top_customers_reflects_issued_invoices(
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
+        """Sprint 17 Session 7: `top_customers` is a real, documented "top 5
+        by total_sales" ranking (TOP_CUSTOMERS_LIMIT) - the shared dev
+        database can legitimately contain real companies with large
+        invoice totals that outrank a small fixed test amount out of the
+        returned slice entirely (this is exactly what happened with a
+        hardcoded 2500.00). Reading the current top-5's highest total_sales
+        first and issuing an invoice that unquestionably exceeds it makes
+        this company rank #1 regardless of whatever legitimate data already
+        exists, without asserting anything about production ordering/limits
+        themselves.
+        """
         tenant_id = await _admin_tenant_id(client)
         headers = await _make_user_headers(db_session, tenant_id, ["dashboard:view"])
+
+        baseline = await client.get("/api/v1/dashboard", headers=headers)
+        highest_existing_sales = max(
+            (Decimal(row["total_sales"]) for row in baseline.json()["widgets"]["top_customers"]),
+            default=Decimal("0"),
+        )
+        winning_amount = highest_existing_sales + Decimal("1000.00")
+
         company = await _make_company(
             db_session, tenant_id, name="Konkan Seafoods", outstanding_amount=Decimal("500.00")
         )
-        await _make_invoice(db_session, tenant_id, company.id, total_amount=Decimal("2500.00"))
+        await _make_invoice(db_session, tenant_id, company.id, total_amount=winning_amount)
 
         response = await client.get("/api/v1/dashboard", headers=headers)
         body = response.json()
@@ -233,7 +252,7 @@ class TestGetDashboardWidgets:
         top_customers = body["widgets"]["top_customers"]
         assert any(
             row["company_name"] == "Konkan Seafoods"
-            and Decimal(row["total_sales"]) >= Decimal("2500.00")
+            and Decimal(row["total_sales"]) >= winning_amount
             for row in top_customers
         )
 

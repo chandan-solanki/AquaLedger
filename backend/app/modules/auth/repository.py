@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.modules.auth.models import (
     AuditLog,
@@ -23,16 +24,25 @@ class AuthRepository:
 
     async def get_user_by_email(self, email: str) -> User | None:
         result = await self._session.execute(
-            select(User).where(
+            select(User)
+            .where(
                 func.lower(User.email) == email.strip().lower(),
                 User.deleted_at.is_(None),
             )
+            # Sprint 17 Session 2: login needs user.tenant.status. User.tenant
+            # is a plain lazy="select" relationship and Base has no AsyncAttrs
+            # mixin, so a bare attribute access here would raise
+            # MissingGreenlet rather than just costing an extra round trip -
+            # eager-loading is not an optimization, it's required correctness.
+            .options(joinedload(User.tenant))
         )
         return result.scalar_one_or_none()
 
     async def get_user_by_id(self, user_id: uuid.UUID) -> User | None:
         result = await self._session.execute(
-            select(User).where(User.id == user_id, User.deleted_at.is_(None))
+            select(User)
+            .where(User.id == user_id, User.deleted_at.is_(None))
+            .options(joinedload(User.tenant))  # see get_user_by_email
         )
         return result.scalar_one_or_none()
 
@@ -101,6 +111,22 @@ class AuthRepository:
         await self._session.execute(
             update(RefreshToken)
             .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
+
+    async def revoke_all_for_tenant(self, tenant_id: uuid.UUID) -> None:
+        """Defense-in-depth for suspending/deactivating a tenant (Sprint 17
+        Session 2) - not required for correctness (raise_if_tenant_blocked
+        already rejects a suspended tenant's refresh attempts immediately,
+        the same way it rejects login/get_current_user), but mirrors
+        UserService.set_status's own "revoke on block" convention rather
+        than leaving already-issued refresh tokens live and unused."""
+        await self._session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id.in_(select(User.id).where(User.tenant_id == tenant_id)),
+                RefreshToken.revoked_at.is_(None),
+            )
             .values(revoked_at=datetime.now(UTC))
         )
 
