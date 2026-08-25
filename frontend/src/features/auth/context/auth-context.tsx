@@ -67,6 +67,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     retry: false,
   });
 
+  // The session query itself resolving to "unauthenticated" (a 401 from
+  // /auth/session — no active session, whether that's a fresh anonymous
+  // visitor or a token that expired naturally while the tab was idle) is
+  // deliberately excluded from useSessionExpiredWatcher below, since a
+  // fresh visitor hitting /login shouldn't see a "session expired" toast.
+  // But the cache still needs clearing on that transition regardless: on a
+  // shared/kiosk device, a naturally-expired session can otherwise leave
+  // the previous user's cached tenant data (dashboard, invoice/payment
+  // lists, etc.) sitting in this same in-memory QueryClient for whoever
+  // logs in next in the same tab, served instantly from cache for anything
+  // still within its staleTime window. This is silent housekeeping, not a
+  // user-facing event — no toast, no redirect (AuthGuard already handles
+  // that via isAuthenticated).
+  useEffect(() => {
+    if (sessionQuery.isError) {
+      queryClient.clear();
+    }
+  }, [sessionQuery.isError, queryClient]);
+
   const loginMutation = useMutation({
     mutationFn: authService.login,
     onSuccess: ({ user }) => {

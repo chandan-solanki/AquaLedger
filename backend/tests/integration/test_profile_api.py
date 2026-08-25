@@ -276,6 +276,10 @@ class TestAvatarUpload:
         assert download.content == _PNG_BYTES
         assert download.headers["content-type"] == "image/png"
         assert "attachment" not in download.headers.get("content-disposition", "")
+        # The route path never varies by caller, so a browser/intermediate
+        # cache needs an explicit signal that these bytes are per-identity
+        # (Sprint 18 Session 1 performance audit).
+        assert download.headers["cache-control"] == "private, no-store"
 
         me = await client.get("/api/v1/auth/me", headers=headers)
         assert me.json()["avatar_url"] == "/profile/avatar"

@@ -41,6 +41,10 @@ export function useCreateSupplierPaymentAllocation() {
       });
       queryClient.invalidateQueries({ queryKey: supplierPaymentKeys.detail(supplierPaymentId) });
       queryClient.invalidateQueries({ queryKey: purchaseBillKeys.detail(allocation.purchaseBillId) });
+      // The purchase bill list's status/balance_amount columns are
+      // recalculated by this same server-side transaction - mirrors
+      // useCreatePaymentAllocation's equivalent invoiceKeys.lists() invalidation.
+      queryClient.invalidateQueries({ queryKey: purchaseBillKeys.lists() });
     },
   });
 }

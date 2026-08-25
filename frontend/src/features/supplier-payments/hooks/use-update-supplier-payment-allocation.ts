@@ -47,6 +47,10 @@ export function useUpdateSupplierPaymentAllocation() {
         queryKey: supplierPaymentAllocationKeys.byPayment(supplierPaymentId),
       });
       queryClient.invalidateQueries({ queryKey: supplierPaymentKeys.detail(supplierPaymentId) });
+      // The purchase bill list's status/balance_amount columns are
+      // recalculated by this same server-side transaction - mirrors
+      // useUpdatePaymentAllocation's equivalent invoiceKeys.lists() invalidation.
+      queryClient.invalidateQueries({ queryKey: purchaseBillKeys.lists() });
 
       queryClient.invalidateQueries({ queryKey: purchaseBillKeys.detail(previousPurchaseBillId) });
       if (allocation.purchaseBillId !== previousPurchaseBillId) {

@@ -36,6 +36,10 @@ export function useDeleteSupplierPaymentAllocation() {
       });
       queryClient.invalidateQueries({ queryKey: supplierPaymentKeys.detail(supplierPaymentId) });
       queryClient.invalidateQueries({ queryKey: purchaseBillKeys.detail(purchaseBillId) });
+      // The purchase bill list's status/balance_amount columns are
+      // recalculated by this same server-side transaction - mirrors
+      // useDeletePaymentAllocation's equivalent invoiceKeys.lists() invalidation.
+      queryClient.invalidateQueries({ queryKey: purchaseBillKeys.lists() });
     },
   });
 }

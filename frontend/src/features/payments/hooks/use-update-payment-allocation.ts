@@ -46,6 +46,10 @@ export function useUpdatePaymentAllocation() {
     onSuccess: (allocation, { paymentId, previousInvoiceId }) => {
       queryClient.invalidateQueries({ queryKey: paymentAllocationKeys.byPayment(paymentId) });
       queryClient.invalidateQueries({ queryKey: paymentKeys.detail(paymentId) });
+      // The invoice list's status/balance_amount columns are recalculated by
+      // this same server-side transaction - mirrors use-issue-invoice.ts's
+      // equivalent invalidation for the same status/total-recalculation shape.
+      queryClient.invalidateQueries({ queryKey: invoiceKeys.lists() });
 
       invalidateInvoiceAndCompany(previousInvoiceId);
       if (allocation.invoiceId !== previousInvoiceId) {

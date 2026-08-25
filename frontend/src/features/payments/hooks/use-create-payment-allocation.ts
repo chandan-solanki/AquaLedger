@@ -41,6 +41,10 @@ export function useCreatePaymentAllocation() {
       queryClient.invalidateQueries({ queryKey: paymentAllocationKeys.byPayment(paymentId) });
       queryClient.invalidateQueries({ queryKey: paymentKeys.detail(paymentId) });
       queryClient.invalidateQueries({ queryKey: invoiceKeys.detail(allocation.invoiceId) });
+      // The invoice list's status/balance_amount columns are recalculated by
+      // this same server-side transaction - mirrors use-issue-invoice.ts's
+      // equivalent invalidation for the same status/total-recalculation shape.
+      queryClient.invalidateQueries({ queryKey: invoiceKeys.lists() });
 
       const invoice = queryClient.getQueryData<Invoice>(invoiceKeys.detail(allocation.invoiceId));
       if (invoice) {

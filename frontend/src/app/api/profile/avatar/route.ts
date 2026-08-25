@@ -18,6 +18,11 @@ export async function GET(_request: NextRequest) {
       status: backendResponse.status,
       headers: {
         "Content-Type": backendResponse.headers.get("content-type") ?? "application/octet-stream",
+        // Set explicitly here too, not just relied on from the backend -
+        // this path is identical for every caller, so a browser/intermediate
+        // cache needs its own unambiguous signal not to reuse the bytes
+        // across sessions (Sprint 18 Session 1 performance audit).
+        "Cache-Control": "private, no-store",
       },
     });
   } catch (error) {

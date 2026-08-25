@@ -1,3 +1,4 @@
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -342,8 +343,12 @@ async def export_report(
         export_format=format,
     )
 
-    content = ExportService().export(
-        export_data, report_type=report_type.value, export_format=format
+    # WeasyPrint/openpyxl rendering is CPU-bound and was running inline on
+    # the event loop, blocking every other request for the render's
+    # duration (Sprint 18 Session 1 performance audit) - to_thread frees
+    # the loop to keep serving other requests while this renders.
+    content = await asyncio.to_thread(
+        ExportService().export, export_data, report_type=report_type.value, export_format=format
     )
     exporter_cls = export_registry.get(format)  # already validated by export() above
 
@@ -402,8 +407,8 @@ async def export_customer_statement(
         export_format=format,
     )
 
-    content = ExportService().export(
-        export_data, report_type="customer_statement", export_format=format
+    content = await asyncio.to_thread(
+        ExportService().export, export_data, report_type="customer_statement", export_format=format
     )
     exporter_cls = export_registry.get(format)
 
@@ -445,8 +450,8 @@ async def export_supplier_statement(
         export_format=format,
     )
 
-    content = ExportService().export(
-        export_data, report_type="supplier_statement", export_format=format
+    content = await asyncio.to_thread(
+        ExportService().export, export_data, report_type="supplier_statement", export_format=format
     )
     exporter_cls = export_registry.get(format)
 

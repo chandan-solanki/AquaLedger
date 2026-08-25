@@ -114,7 +114,14 @@ async def get_company_logo(
     service: CompanyProfileService = Depends(get_company_profile_service),
 ) -> Response:
     content, content_type = await service.load_logo_bytes(current_user.tenant_id)
-    return Response(content=content, media_type=content_type)
+    # Same fixed-URL-for-every-caller concern as the avatar endpoint: this
+    # path never varies by tenant, so an intermediate/browser cache has no
+    # signal that the bytes behind it differ per authenticated session.
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.delete(

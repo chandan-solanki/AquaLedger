@@ -71,7 +71,17 @@ async def get_avatar(
     service: ProfileService = Depends(get_profile_service),
 ) -> Response:
     content, content_type = await service.load_avatar_bytes(current_user)
-    return Response(content=content, media_type=content_type)
+    # The route path is identical for every caller ("whoever is currently
+    # authenticated"), so without an explicit no-store/private directive a
+    # browser or intermediate cache has no signal that this response is
+    # per-identity - on a shared/kiosk device, User A's avatar bytes could
+    # otherwise be served back to User B from the browser's own HTTP cache
+    # after a user switch in the same browser profile.
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.post(

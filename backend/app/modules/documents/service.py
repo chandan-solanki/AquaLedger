@@ -1,3 +1,4 @@
+import asyncio
 import math
 import uuid
 from typing import NamedTuple
@@ -115,7 +116,21 @@ class DocumentRecordService:
         caller's request fails outright rather than silently returning a
         PDF the Document Center never learns about.
         """
-        rendered = DocumentService().generate(data.document_type.value, data)
+        # Sprint 18 Session 2: this is the single choke point every
+        # business document endpoint (invoice/purchase-bill/customer- and
+        # supplier-payment-receipt/purchase-order/delivery-challan) reaches
+        # through - `DocumentService.generate()` is a synchronous,
+        # CPU-bound ReportLab render over an already-fully-resolved,
+        # immutable `DocumentData` (no AsyncSession, no ORM relationship,
+        # no request object crosses this boundary), so running it via
+        # `to_thread` frees the event loop to keep serving other requests
+        # for the render's duration - the same fix Session 1 applied to
+        # the WeasyPrint-based report/statement exports. This does not add
+        # CPU capacity on a 1-vCPU box; it only stops one render from
+        # freezing every other concurrent request.
+        rendered = await asyncio.to_thread(
+            DocumentService().generate, data.document_type.value, data
+        )
         filename = build_document_filename(
             data.document_type, data.document_number, extension=rendered.file_extension
         )

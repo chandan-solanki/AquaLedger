@@ -72,6 +72,23 @@ class Trip(TimestampMixin, Base):
             "boat_id",
             postgresql_where=deleted_at.is_(None),
         ),
+        # Sprint 18 Session 1 performance audit: the list endpoint's default
+        # sort is -created_at and status is a common filter, but nothing
+        # supported "tenant_id [+status] ORDER BY created_at" the way every
+        # sibling module (invoices, payments, purchase_orders, ...) already
+        # does for its own equivalent query shape.
+        Index(
+            "ix_trips_tenant_status",
+            "tenant_id",
+            "status",
+            postgresql_where=deleted_at.is_(None),
+        ),
+        Index(
+            "ix_trips_tenant_created_at",
+            "tenant_id",
+            "created_at",
+            postgresql_where=deleted_at.is_(None),
+        ),
         # Session 4 business rule ("a boat cannot have more than one active
         # trip") enforced at the database, not just in the service layer -
         # a SELECT-then-INSERT check has a race window between concurrent

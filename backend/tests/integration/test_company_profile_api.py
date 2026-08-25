@@ -206,6 +206,10 @@ class TestCompanyLogo:
         assert download.content == _PNG_BYTES
         assert download.headers["content-type"] == "image/png"
         assert "attachment" not in download.headers.get("content-disposition", "")
+        # The route path never varies by tenant, so a browser/intermediate
+        # cache needs an explicit signal not to reuse it across sessions
+        # (Sprint 18 Session 1 performance audit).
+        assert download.headers["cache-control"] == "private, no-store"
 
     async def test_invalid_content_type_is_415(self, client: AsyncClient) -> None:
         headers = await _admin_headers(client)
