@@ -20,6 +20,11 @@ export async function GET(request: NextRequest) {
         "Content-Type": backendResponse.headers.get("content-type") ?? "application/octet-stream",
         "Content-Disposition":
           backendResponse.headers.get("content-disposition") ?? "attachment",
+        // Tenant-specific report bytes behind a shared URL shape - an
+        // explicit signal so no browser/intermediate cache reuses one
+        // tenant's export for another (mirrors /api/company-profile/logo's
+        // Session 1 fix).
+        "Cache-Control": "private, no-store",
       },
     });
   } catch (error) {

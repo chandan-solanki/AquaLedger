@@ -19,6 +19,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         "Content-Type": backendResponse.headers.get("content-type") ?? "application/octet-stream",
         "Content-Disposition":
           backendResponse.headers.get("content-disposition") ?? "attachment",
+        // Every caller's URL is identical regardless of which receipt's PDF
+        // they get back - an explicit signal so no browser/intermediate
+        // cache reuses one tenant's receipt for another (mirrors
+        // /api/company-profile/logo's Session 1 fix).
+        "Cache-Control": "private, no-store",
       },
     });
   } catch (error) {

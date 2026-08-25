@@ -213,15 +213,11 @@ class InvoiceService:
         except CompanyNotFoundError as exc:
             raise InvoiceCompanyNotFoundError("The specified company does not exist") from exc
 
-        fish_by_id: dict[uuid.UUID, FishResponse] = {}
-        for item in items:
-            if item.fish_id not in fish_by_id:
-                try:
-                    fish_by_id[item.fish_id] = await self._fish_service.get(
-                        item.fish_id, tenant_id=tenant_id
-                    )
-                except FishNotFoundError as exc:
-                    raise InvoiceItemFishNotFoundError("The specified fish does not exist") from exc
+        distinct_fish_ids = list({item.fish_id for item in items})
+        fish_list = await self._fish_service.get_many_by_ids(distinct_fish_ids, tenant_id=tenant_id)
+        fish_by_id: dict[uuid.UUID, FishResponse] = {fish.id: fish for fish in fish_list}
+        if len(fish_by_id) != len(distinct_fish_ids):
+            raise InvoiceItemFishNotFoundError("The specified fish does not exist")
 
         tenant_name = await self._get_tenant_name(tenant_id)
         profile_context = await self._company_profile_service.get_document_context(tenant_id)

@@ -9,12 +9,14 @@ import pytest
 from app.core.errors import ConflictError
 from app.modules.companies.constants import CompanyStatus
 from app.modules.companies.exceptions import CompanyNotFoundError
+from app.modules.company_profile.service import CompanyProfileDocumentContext
 from app.modules.fish.exceptions import FishNotFoundError
 from app.modules.invoices.constants import InvoiceStatus
 from app.modules.invoices.exceptions import (
     InvoiceCalculationError,
     InvoiceCompanyInactiveError,
     InvoiceCompanyNotFoundError,
+    InvoiceDocumentNotAvailableError,
     InvoiceEmptyError,
     InvoiceInsufficientInventoryError,
     InvoiceItemFishMismatchError,
@@ -185,21 +187,38 @@ class _FakeIssueTripCatchService:
         return object()
 
 
+class _FishStub:
+    """Stands in for a FishResponse - only .id is read by
+    InvoiceService.get_document_context's fish_by_id assembly."""
+
+    def __init__(self, fish_id: uuid.UUID | None = None) -> None:
+        self.id = fish_id or uuid.uuid4()
+
+
 class _FakeFishService:
-    """Stands in for FishService.get/find_ids_by_name - the two entry
-    points InvoiceService calls."""
+    """Stands in for FishService.get/get_many_by_ids/find_ids_by_name - the
+    entry points InvoiceService calls."""
 
     def __init__(self, *, raises: bool = False) -> None:
         self.raises = raises
         self.get_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
         self.find_ids_calls: list[tuple[uuid.UUID, str]] = []
         self.find_ids_result: list[uuid.UUID] = []
+        # For get_document_context (batched fish lookup - N+1 fix).
+        self.many_by_id: dict[uuid.UUID, _FishStub] = {}
+        self.get_many_by_ids_calls: list[tuple[list[uuid.UUID], uuid.UUID]] = []
 
     async def get(self, fish_id: uuid.UUID, *, tenant_id: uuid.UUID) -> object:
         self.get_calls.append((fish_id, tenant_id))
         if self.raises:
             raise FishNotFoundError("Fish not found")
         return object()
+
+    async def get_many_by_ids(
+        self, fish_ids: list[uuid.UUID], *, tenant_id: uuid.UUID
+    ) -> list[_FishStub]:
+        self.get_many_by_ids_calls.append((fish_ids, tenant_id))
+        return [self.many_by_id[fid] for fid in fish_ids if fid in self.many_by_id]
 
     async def find_ids_by_name(self, tenant_id: uuid.UUID, q: str) -> list[uuid.UUID]:
         self.find_ids_calls.append((tenant_id, q))
@@ -375,6 +394,46 @@ def _service_with_fakes(
     service._repo = fake_repo  # type: ignore[assignment]
     service._company_service = fake_company_service  # type: ignore[assignment]
     return service, fake_repo, fake_company_service
+
+
+class _FakeCompanyProfileService:
+    """Stands in for CompanyProfileService.get_document_context - the one
+    entry point get_document_context calls on it."""
+
+    def __init__(self) -> None:
+        self.calls: list[uuid.UUID] = []
+
+    async def get_document_context(self, tenant_id: uuid.UUID) -> CompanyProfileDocumentContext:
+        self.calls.append(tenant_id)
+        return CompanyProfileDocumentContext(
+            display_name=None, tenant_details=None, logo_bytes=None, logo_content_type=None
+        )
+
+
+def _service_with_document_context_fakes(
+    invoice: Invoice, items: list[InvoiceItem], *, company: _CompanyStub | None = None
+) -> tuple[InvoiceService, _FakeInvoiceRepo, _FakeFishService]:
+    """Wires get_document_context's full dependency chain (repo, company
+    service, fish service, company profile service, and the tenant-name
+    lookup) with fakes so the batched fish-lookup fix can be exercised
+    without a database."""
+    service = InvoiceService.__new__(InvoiceService)
+    fake_repo = _FakeInvoiceRepo()
+    fake_repo.by_id[invoice.id] = invoice
+    fake_repo.items_by_invoice[invoice.id] = items
+    fake_fish_service = _FakeFishService()
+    service._repo = fake_repo  # type: ignore[assignment]
+    service._company_service = _FakeCompanyService(  # type: ignore[assignment]
+        company=company or _CompanyStub()
+    )
+    service._fish_service = fake_fish_service  # type: ignore[assignment]
+    service._company_profile_service = _FakeCompanyProfileService()  # type: ignore[assignment]
+
+    async def _fake_get_tenant_name(_tenant_id: uuid.UUID) -> str:
+        return "Some Tenant"
+
+    service._get_tenant_name = _fake_get_tenant_name  # type: ignore[method-assign]
+    return service, fake_repo, fake_fish_service
 
 
 class _FakeSession:
@@ -1943,3 +2002,60 @@ class TestAllocateInvoiceNumber:
         await service._allocate_invoice_number(invoice, tenant_id)
 
         assert fake_repo.ensure_sequence_calls == [(tenant_id, "INV", "2026-27")]
+
+
+class TestGetDocumentContext:
+    """get_document_context looks up every distinct fish referenced by an
+    invoice's line items exactly once, via a single batched call - not one
+    FishService.get() per item (Sprint 18 Session 4 fix: this used to be
+    an N+1, one query per distinct fish_id, on the invoice-PDF path)."""
+
+    async def test_batches_the_fish_lookup_into_a_single_call(self) -> None:
+        tenant_id = uuid.uuid4()
+        invoice = _make_invoice(tenant_id=tenant_id, invoice_number="INV/2026-27/00001")
+        shared_fish_id = uuid.uuid4()
+        other_fish_id = uuid.uuid4()
+        items = [
+            _make_invoice_item(invoice_id=invoice.id, tenant_id=tenant_id, fish_id=shared_fish_id),
+            _make_invoice_item(
+                invoice_id=invoice.id, tenant_id=tenant_id, fish_id=shared_fish_id, line_number=2
+            ),
+            _make_invoice_item(
+                invoice_id=invoice.id, tenant_id=tenant_id, fish_id=other_fish_id, line_number=3
+            ),
+        ]
+        service, _, fake_fish_service = _service_with_document_context_fakes(invoice, items)
+        fake_fish_service.many_by_id = {
+            shared_fish_id: _FishStub(shared_fish_id),
+            other_fish_id: _FishStub(other_fish_id),
+        }
+
+        context = await service.get_document_context(invoice.id, tenant_id=tenant_id)
+
+        assert len(fake_fish_service.get_many_by_ids_calls) == 1
+        called_ids, called_tenant_id = fake_fish_service.get_many_by_ids_calls[0]
+        assert set(called_ids) == {shared_fish_id, other_fish_id}
+        assert called_tenant_id == tenant_id
+        assert set(context.fish_by_id) == {shared_fish_id, other_fish_id}
+
+    async def test_raises_fish_not_found_when_a_referenced_fish_is_missing(self) -> None:
+        tenant_id = uuid.uuid4()
+        invoice = _make_invoice(tenant_id=tenant_id, invoice_number="INV/2026-27/00001")
+        missing_fish_id = uuid.uuid4()
+        items = [
+            _make_invoice_item(invoice_id=invoice.id, tenant_id=tenant_id, fish_id=missing_fish_id)
+        ]
+        service, _, fake_fish_service = _service_with_document_context_fakes(invoice, items)
+        # bulk lookup omits the missing id, mirroring FishRepository.get_many_by_ids
+        fake_fish_service.many_by_id = {}
+
+        with pytest.raises(InvoiceItemFishNotFoundError):
+            await service.get_document_context(invoice.id, tenant_id=tenant_id)
+
+    async def test_raises_document_not_available_for_a_draft_invoice(self) -> None:
+        tenant_id = uuid.uuid4()
+        invoice = _make_invoice(tenant_id=tenant_id, invoice_number=None)
+        service, _, _ = _service_with_document_context_fakes(invoice, [])
+
+        with pytest.raises(InvoiceDocumentNotAvailableError):
+            await service.get_document_context(invoice.id, tenant_id=tenant_id)
