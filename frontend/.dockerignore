@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+.env
+.env.*
+!.env.example
+!.env.production.example
+.git/
+.gitignore
+*.md
+coverage/

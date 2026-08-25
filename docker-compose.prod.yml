@@ -1,0 +1,125 @@
+# AquaLedger — Production Docker Compose (Sprint 18 Session 3)
+#
+# Target: a single Oracle Ubuntu VPS, 1 vCPU / 6 GB RAM. Everything here
+# is sized for that one box, not a generic multi-node deployment.
+#
+# Network topology (evidence, not assumption - see DEPLOYMENT.md): the
+# browser only ever talks to the `frontend` container. Every backend call
+# happens server-side, inside the Next.js BFF layer
+# (frontend/src/lib/auth/authenticated-backend-request.ts and friends),
+# over this compose network - confirmed there is no client-side code path
+# that calls the backend directly. So `backend` and `postgres` publish NO
+# ports to the host at all; only `frontend` does, for a future reverse
+# proxy (nginx, Session 4) to sit in front of.
+#
+# NOT build/run-verified in this session - no Docker daemon was available
+# in this development environment. Treat `docker compose -f
+# docker-compose.prod.yml config` and a real `docker compose up` on the
+# deployment host as the verification steps this session could not
+# perform.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # `pg_isready` is the standard, built-in liveness/readiness probe for
+    # this image - no custom script needed. `depends_on` below uses this
+    # (not a plain startup-order dependency) so the backend's own
+    # `alembic upgrade head` entrypoint step never races an
+    # still-initializing Postgres.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # No `ports:` - internal-only, reached by `backend` as `postgres:5432`
+    # over the default Compose network.
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Generated invoice/receipt/etc. PDFs (app.core.document_engine.storage)
+      # and the structlog file handlers (app.core.logging) both write to
+      # paths relative to the container's working directory - named
+      # volumes so a container recreate never loses either.
+      - backend_storage:/app/storage
+      - backend_logs:/app/logs
+    healthcheck:
+      # /health/ready (added this session) checks the process is up AND
+      # can reach Postgres - distinct from the plain liveness /health.
+      # No curl/wget in this slim image; a one-line Python check avoids
+      # adding a package just for this.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/ready', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # No `ports:` - see the network-topology note at the top of this file.
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME}
+        NEXT_PUBLIC_APP_ENV: ${NEXT_PUBLIC_APP_ENV}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      # Published so a reverse proxy (nginx, Session 4) - or, before that
+      # exists, a direct browser test - can reach it. Not proxied through
+      # anything yet; that's explicitly deferred to the real VPS
+      # deployment session.
+      - "3000:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3000/login', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  postgres_data:
+  backend_storage:
+  backend_logs:
+
+# Deliberately no `deploy.resources.limits/reservations` block: that key
+# is a Swarm-mode construct, and assuming plain `docker compose up` on a
+# single VPS enforces it is exactly the "Docker Swarm settings without
+# Swarm" mistake this session was told to avoid. No `mem_limit`/`cpus`
+# (the classic-Compose alternative that IS enforced outside Swarm)
+# either - a hard cap risks the OOM killer taking down a container during
+# a legitimate burst (e.g. concurrent PDF exports) instead of the box
+# gracefully leaning on swap (see DEPLOYMENT.md "Swap"), which is the
+# safety net this deployment actually relies on. Revisit if real
+# production memory pressure is ever observed - not before.
