@@ -17,6 +17,16 @@ class TenantStatusUnchangedError(ConflictError):
     code = "TENANT_STATUS_UNCHANGED"
 
 
+class TenantAdministratorNotFoundError(NotFoundError):
+    """Raised for a user_id that doesn't exist in the given tenant, or
+    exists but isn't actually an administrator (is_superuser or holding the
+    admin/super_admin role) - a platform admin may only reset a tenant
+    *administrator's* password, never an arbitrary tenant user's, so both
+    cases are reported identically to avoid leaking which one it was."""
+
+    code = "TENANT_ADMINISTRATOR_NOT_FOUND"
+
+
 class LastReachablePlatformAdminError(BusinessRuleError):
     """Raised when a status change would leave zero platform administrators
     reachable anywhere on the platform (Sprint 17 Session 2 Phase 6) - every

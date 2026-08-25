@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.modules.auth.constants import TenantStatus
+from app.modules.auth.constants import AccountStatus, TenantStatus
 
 # Deliberately local copies, not shared imports - same convention
 # app/modules/profile/schemas.py already follows for its own identical
@@ -183,6 +183,47 @@ class TenantStatusUpdateRequest(BaseModel):
     )
 
     status: TenantStatus
+
+
+class TenantAdministratorResponse(BaseModel):
+    """One of a tenant's administrators (Sprint 17 Session 7) - identity
+    fields only, the same restraint TenantAdministratorSummary already
+    applies at provisioning time. Exists solely so a platform admin can
+    identify which user to target for a password reset; this is not a
+    general tenant user-management listing and never includes roles,
+    permissions, or any tenant business data."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "019f7af3-83d5-7723-9cec-97060761aae4",
+                "email": "owner@oceanfresh.example",
+                "username": "oceanfresh-owner",
+                "full_name": "Priya Nair",
+                "is_superuser": True,
+                "status": "active",
+            }
+        }
+    )
+
+    id: uuid.UUID
+    email: str
+    username: str
+    full_name: str
+    is_superuser: bool
+    status: AccountStatus
+
+
+class TenantAdministratorPasswordResetRequest(BaseModel):
+    """Platform-admin-triggered reset of a tenant administrator's password -
+    mirrors UserPasswordResetRequest's own shape exactly (same password
+    policy, same must_change_password-on-next-login behavior)."""
+
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra={"example": {"new_password": "TempPass@123"}}
+    )
+
+    new_password: str = Field(min_length=8, max_length=128, examples=["TempPass@123"])
 
 
 class PlatformDashboardResponse(BaseModel):

@@ -20,19 +20,25 @@ from app.modules.auth.security import hash_password, password_policy_violations
 from app.modules.platform_admin.exceptions import (
     DuplicateTenantSlugError,
     LastReachablePlatformAdminError,
+    TenantAdministratorNotFoundError,
     TenantNotFoundError,
     TenantStatusUnchangedError,
 )
 from app.modules.platform_admin.repository import TenantRepository
 from app.modules.platform_admin.schemas import (
     PlatformDashboardResponse,
+    TenantAdministratorResponse,
     TenantAdministratorSummary,
     TenantCreateRequest,
     TenantListParams,
     TenantProvisioningResponse,
     TenantResponse,
 )
-from app.modules.users.exceptions import DuplicateUserEmailError, DuplicateUsernameError
+from app.modules.users.exceptions import (
+    CannotResetOwnPasswordError,
+    DuplicateUserEmailError,
+    DuplicateUsernameError,
+)
 
 # GET /platform/dashboard's "Recent Tenants" section - mirrors the Dashboard
 # module's own top-N widgets (TopCustomerItem etc.), all of which cap at 5.
@@ -283,6 +289,84 @@ class TenantService:
         await self._session.commit()
         await self._session.refresh(tenant)
         return TenantResponse.model_validate(tenant)
+
+    async def list_administrators(self, tenant_id: uuid.UUID) -> list[TenantAdministratorResponse]:
+        """Sprint 17 Session 7 - lets a platform admin identify which user
+        to target for a password reset. Identity fields only, never roles/
+        permissions/business data (mirrors TenantAdministratorSummary's own
+        restraint at provisioning time)."""
+        await self._get_or_raise(tenant_id)
+        admins = await self._repo.list_administrators(tenant_id)
+        return [
+            TenantAdministratorResponse(
+                id=admin.id,
+                email=admin.email,
+                username=admin.username,
+                full_name=admin.full_name,
+                is_superuser=admin.is_superuser,
+                status=admin.status,
+            )
+            for admin in admins
+        ]
+
+    async def reset_administrator_password(
+        self,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        new_password: str,
+        *,
+        actor: User,
+        ctx: RequestContext,
+    ) -> TenantAdministratorResponse:
+        """Sprint 17 Session 7 - a platform-admin-only escape hatch for a
+        locked-out tenant. Deliberately narrow: `TenantRepository.
+        get_administrator` only ever returns a user who is actually an
+        administrator (is_superuser or admin/super_admin role) of this
+        specific tenant, so this can never be used to touch an arbitrary
+        tenant user. Mirrors UserService.reset_password's own behavior
+        exactly (must_change_password on next login, every existing session
+        revoked) - this grants the platform admin no ongoing access to the
+        tenant, and never touches is_superuser/is_platform_admin/roles."""
+        await self._get_or_raise(tenant_id)
+        user = await self._repo.get_administrator(tenant_id, user_id)
+        if user is None:
+            raise TenantAdministratorNotFoundError("Tenant administrator not found")
+        if user.id == actor.id:
+            raise CannotResetOwnPasswordError(
+                "Use Change Password in your own profile to change your own password"
+            )
+
+        violations = password_policy_violations(new_password)
+        if violations:
+            raise ValidationError(
+                "Password does not meet policy requirements",
+                field_errors={"new_password": violations},
+            )
+
+        user.password_hash = hash_password(new_password)
+        user.password_changed_at = None
+        await self._auth_repo.revoke_all_for_user(user.id)
+        await self._auth_repo.add_audit_log(
+            tenant_id=actor.tenant_id,
+            user_id=actor.id,
+            action="tenant_administrator_password_reset",
+            entity_type="user",
+            entity_id=user.id,
+            changes={"tenant_id": str(tenant_id)},
+            ip_address=ctx.ip,
+            user_agent=ctx.user_agent,
+            request_id=ctx.request_id,
+        )
+        await self._session.commit()
+        await self._session.refresh(user)
+        return TenantAdministratorResponse(
+            id=user.id,
+            email=user.email,
+            username=user.username,
+            full_name=user.full_name,
+            is_superuser=user.is_superuser,
+            status=user.status,
+        )
 
     async def _get_or_raise(self, tenant_id: uuid.UUID) -> Tenant:
         tenant = await self._repo.get_tenant_by_id(tenant_id)

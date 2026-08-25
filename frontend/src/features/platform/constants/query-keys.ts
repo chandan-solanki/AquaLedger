@@ -13,3 +13,8 @@ export const platformDashboardKeys = {
   all: () => ["platform", "dashboard"] as const,
   summary: () => [...platformDashboardKeys.all(), "summary"] as const,
 };
+
+export const platformTenantAdministratorKeys = {
+  all: (tenantId: string) => [...platformTenantKeys.detail(tenantId), "administrators"] as const,
+  list: (tenantId: string) => [...platformTenantAdministratorKeys.all(tenantId), "list"] as const,
+};

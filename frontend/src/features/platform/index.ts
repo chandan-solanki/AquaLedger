@@ -59,3 +59,16 @@ export type {
   PlatformDashboardData,
 } from "@/features/platform/types/platform-dashboard";
 export { mapBackendPlatformDashboard } from "@/features/platform/types/platform-dashboard";
+
+export { platformTenantAdministratorKeys } from "@/features/platform/constants/query-keys";
+export { useTenantAdministrators } from "@/features/platform/hooks/use-tenant-administrators";
+export {
+  useResetTenantAdministratorPassword,
+  type ResetTenantAdministratorPasswordVariables,
+} from "@/features/platform/hooks/use-reset-tenant-administrator-password";
+export { platformTenantAdministratorService } from "@/features/platform/services/tenant-administrator-service";
+export type {
+  BackendTenantAdministrator,
+  TenantAdministrator,
+} from "@/features/platform/types/tenant-administrator";
+export { mapBackendTenantAdministrator } from "@/features/platform/types/tenant-administrator";

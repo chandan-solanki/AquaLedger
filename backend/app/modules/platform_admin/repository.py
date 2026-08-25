@@ -4,7 +4,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.modules.auth.constants import AccountStatus, TenantStatus
+from app.modules.auth.constants import ADMIN_ROLE, SUPER_ADMIN_ROLE, AccountStatus, TenantStatus
 from app.modules.auth.models import Role, RolePermission, Tenant, User, UserRole
 
 # Every module in this codebase queries auth.models' shared tables directly
@@ -85,6 +85,48 @@ class TenantRepository:
 
     def add_user_role(self, user_role: UserRole) -> None:
         self._session.add(user_role)
+
+    async def list_administrators(self, tenant_id: uuid.UUID) -> list[User]:
+        """Sprint 17 Session 7: active, non-deleted users in this tenant who
+        are either is_superuser or hold the admin/super_admin role - the
+        same "administrator" predicate UserRepository.count_other_active_admins
+        already uses, so a platform admin's password-reset target list can
+        never include an ordinary tenant user."""
+        result = await self._session.execute(
+            select(User)
+            .outerjoin(UserRole, UserRole.user_id == User.id)
+            .outerjoin(Role, Role.id == UserRole.role_id)
+            .where(
+                User.tenant_id == tenant_id,
+                User.deleted_at.is_(None),
+                User.status == AccountStatus.ACTIVE,
+                or_(User.is_superuser.is_(True), Role.name.in_((ADMIN_ROLE, SUPER_ADMIN_ROLE))),
+            )
+            .order_by(User.email)
+            .distinct()
+        )
+        return list(result.scalars().all())
+
+    async def get_administrator(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
+        """Sprint 17 Session 7: the single source of truth for "is this
+        user actually an administrator of this tenant" - returns None for a
+        user_id that doesn't exist, belongs to a different tenant, is
+        soft-deleted, or simply isn't an administrator, so the service
+        layer reports all of those identically (never leaking which case
+        applied) via TenantAdministratorNotFoundError."""
+        result = await self._session.execute(
+            select(User)
+            .outerjoin(UserRole, UserRole.user_id == User.id)
+            .outerjoin(Role, Role.id == UserRole.role_id)
+            .where(
+                User.id == user_id,
+                User.tenant_id == tenant_id,
+                User.deleted_at.is_(None),
+                or_(User.is_superuser.is_(True), Role.name.in_((ADMIN_ROLE, SUPER_ADMIN_ROLE))),
+            )
+            .distinct()
+        )
+        return result.scalar_one_or_none()
 
     async def count_tenants_by_status(self) -> dict[TenantStatus, int]:
         """Powers GET /platform/dashboard's summary cards - one grouped

@@ -1,19 +1,29 @@
 "use client";
 
-import { Ban, CircleCheck, Landmark, PowerOff } from "lucide-react";
+import { Ban, CircleCheck, KeyRound, Landmark, PowerOff } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
 import { DescriptionList } from "@/components/data-display/description-list";
 import { InfoCard } from "@/components/data-display/info-card";
 import { ConfirmationDialog } from "@/components/feedback/dialogs/confirmation-dialog";
+import { EmptyState } from "@/components/feedback/empty-state";
 import { SectionHeader } from "@/components/layout/section-header";
 import { DetailPageTemplate } from "@/components/templates/detail-page-template";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { TENANT_STATUS_BADGE_VARIANT, TENANT_STATUS_LABELS } from "@/features/platform/constants/tenant-status";
+import { useResetTenantAdministratorPassword } from "@/features/platform/hooks/use-reset-tenant-administrator-password";
 import { useTenant } from "@/features/platform/hooks/use-tenant";
+import { useTenantAdministrators } from "@/features/platform/hooks/use-tenant-administrators";
 import { useUpdateTenantStatus } from "@/features/platform/hooks/use-update-tenant-status";
+import type { TenantAdministrator } from "@/features/platform/types/tenant-administrator";
 import type { TenantStatus } from "@/features/platform/types/tenant";
+import { ResetPasswordDialog } from "@/features/users/components/reset-password-dialog";
+import { USER_STATUS_BADGE_VARIANT, USER_STATUS_LABELS } from "@/features/users/constants/user-status";
+import type { UserPasswordResetFormValues } from "@/features/users/schemas/user-form-schema";
+import { toastSuccess } from "@/lib/toast";
 import { normalizeApiError } from "@/utils/api-error";
 import { formatDateTime } from "@/utils/format-date";
 
@@ -34,12 +44,27 @@ export function PlatformTenantDetailPage() {
   const params = useParams<{ id: string }>();
   const tenantId = params.id;
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const [passwordResetTarget, setPasswordResetTarget] = useState<TenantAdministrator | null>(null);
 
   const tenantQuery = useTenant(tenantId);
   const updateTenantStatus = useUpdateTenantStatus();
+  const administratorsQuery = useTenantAdministrators(tenantId);
+  const resetAdministratorPassword = useResetTenantAdministratorPassword();
 
   const tenant = tenantQuery.data;
   const apiError = tenantQuery.isError ? normalizeApiError(tenantQuery.error) : null;
+  const administrators = administratorsQuery.data ?? [];
+
+  async function handleResetAdministratorPassword(values: UserPasswordResetFormValues) {
+    if (!passwordResetTarget) return;
+    await resetAdministratorPassword.mutateAsync({
+      tenantId,
+      userId: passwordResetTarget.id,
+      newPassword: values.new_password,
+    });
+    toastSuccess(`${passwordResetTarget.fullName}'s password was reset.`);
+    setPasswordResetTarget(null);
+  }
 
   const secondaryActions = tenant
     ? tenant.status === "active"
@@ -136,7 +161,63 @@ export function PlatformTenantDetailPage() {
               />
             </InfoCard>
           </div>
+
+          <SectionHeader
+            title="Administrators"
+            description="Active users with administrator access to this tenant. Resetting a password immediately signs that user out everywhere and forces them to set a new one on next login."
+          />
+
+          <InfoCard>
+            {administratorsQuery.isLoading ? (
+              <div className="space-y-3" aria-hidden>
+                {Array.from({ length: 2 }).map((_, index) => (
+                  <Skeleton key={index} className="h-10 w-full" />
+                ))}
+              </div>
+            ) : administrators.length === 0 ? (
+              <EmptyState title="No active administrators" description="This tenant has no active administrator account." />
+            ) : (
+              <ul className="divide-y divide-border">
+                {administrators.map((administrator) => (
+                  <li
+                    key={administrator.id}
+                    className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {administrator.fullName}
+                        </p>
+                        <Badge variant={USER_STATUS_BADGE_VARIANT[administrator.status]}>
+                          {USER_STATUS_LABELS[administrator.status]}
+                        </Badge>
+                      </div>
+                      <p className="truncate text-sm text-muted-foreground">{administrator.email}</p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => setPasswordResetTarget(administrator)}
+                    >
+                      <KeyRound aria-hidden />
+                      Reset Password
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </InfoCard>
         </div>
+      )}
+
+      {passwordResetTarget && (
+        <ResetPasswordDialog
+          open={Boolean(passwordResetTarget)}
+          onOpenChange={(open) => !open && setPasswordResetTarget(null)}
+          userName={passwordResetTarget.fullName}
+          onSubmit={handleResetAdministratorPassword}
+        />
       )}
 
       {tenant && pendingAction && (

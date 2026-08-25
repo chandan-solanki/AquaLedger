@@ -4,10 +4,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TenantStatus } from "@/features/platform/types/tenant";
 
-const { useTenantMock, useUpdateTenantStatusMock, updateTenantStatusMutateMock } = vi.hoisted(() => ({
+const {
+  useTenantMock,
+  useUpdateTenantStatusMock,
+  updateTenantStatusMutateMock,
+  useTenantAdministratorsMock,
+  useResetTenantAdministratorPasswordMock,
+  resetAdministratorPasswordMutateAsyncMock,
+} = vi.hoisted(() => ({
   useTenantMock: vi.fn(),
   useUpdateTenantStatusMock: vi.fn(),
   updateTenantStatusMutateMock: vi.fn(),
+  useTenantAdministratorsMock: vi.fn(),
+  useResetTenantAdministratorPasswordMock: vi.fn(),
+  resetAdministratorPasswordMutateAsyncMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -21,6 +31,19 @@ vi.mock("@/features/platform/hooks/use-tenant", () => ({
 
 vi.mock("@/features/platform/hooks/use-update-tenant-status", () => ({
   useUpdateTenantStatus: useUpdateTenantStatusMock,
+}));
+
+vi.mock("@/features/platform/hooks/use-tenant-administrators", () => ({
+  useTenantAdministrators: useTenantAdministratorsMock,
+}));
+
+vi.mock("@/features/platform/hooks/use-reset-tenant-administrator-password", () => ({
+  useResetTenantAdministratorPassword: useResetTenantAdministratorPasswordMock,
+}));
+
+vi.mock("@/lib/toast", () => ({
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 import { PlatformTenantDetailPage } from "@/features/platform/pages/platform-tenant-detail-page";
@@ -47,10 +70,35 @@ function mockTenant(overrides: Partial<typeof ACTIVE_TENANT> = {}) {
   });
 }
 
+const ACTIVE_ADMINISTRATOR = {
+  id: "admin-1",
+  email: "owner@oceanfresh.example",
+  username: "oceanfresh-owner",
+  fullName: "Priya Nair",
+  isSuperuser: true,
+  status: "active" as const,
+};
+
+function mockAdministrators(overrides: Partial<ReturnType<typeof useTenantAdministratorsMock>> = {}) {
+  useTenantAdministratorsMock.mockReturnValue({
+    data: [ACTIVE_ADMINISTRATOR],
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+    ...overrides,
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockTenant();
   useUpdateTenantStatusMock.mockReturnValue({ mutate: updateTenantStatusMutateMock, isPending: false });
+  mockAdministrators();
+  useResetTenantAdministratorPasswordMock.mockReturnValue({
+    mutateAsync: resetAdministratorPasswordMutateAsyncMock,
+    isPending: false,
+  });
 });
 
 describe("PlatformTenantDetailPage", () => {
@@ -176,5 +224,39 @@ describe("PlatformTenantDetailPage", () => {
 
     expect(screen.getByText("Failed to load tenant")).toBeInTheDocument();
     expect(screen.getByText("Tenant not found")).toBeInTheDocument();
+  });
+
+  it("renders the tenant's administrators with a Reset Password action", () => {
+    render(<PlatformTenantDetailPage />);
+
+    expect(screen.getByText("Priya Nair")).toBeInTheDocument();
+    expect(screen.getByText("owner@oceanfresh.example")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reset password/i })).toBeInTheDocument();
+  });
+
+  it("renders an empty state when the tenant has no active administrators", () => {
+    mockAdministrators({ data: [] });
+    render(<PlatformTenantDetailPage />);
+
+    expect(screen.getByText("No active administrators")).toBeInTheDocument();
+  });
+
+  it("opens the reset-password dialog for the clicked administrator and submits the new password", async () => {
+    const user = userEvent.setup();
+    resetAdministratorPasswordMutateAsyncMock.mockResolvedValue(ACTIVE_ADMINISTRATOR);
+    render(<PlatformTenantDetailPage />);
+
+    await user.click(screen.getByRole("button", { name: /reset password/i }));
+    expect(screen.getByText("Reset password for Priya Nair")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/^new password/i), "BrandNew@456");
+    await user.type(screen.getByLabelText(/confirm new password/i), "BrandNew@456");
+    await user.click(screen.getByRole("button", { name: /^reset password$/i }));
+
+    expect(resetAdministratorPasswordMutateAsyncMock).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      userId: "admin-1",
+      newPassword: "BrandNew@456",
+    });
   });
 });

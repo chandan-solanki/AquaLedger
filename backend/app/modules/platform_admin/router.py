@@ -26,6 +26,8 @@ from app.modules.platform_admin.dependencies import get_tenant_service
 from app.modules.platform_admin.schemas import (
     PlatformAdminProfileResponse,
     PlatformDashboardResponse,
+    TenantAdministratorPasswordResetRequest,
+    TenantAdministratorResponse,
     TenantCreateRequest,
     TenantListParams,
     TenantProvisioningResponse,
@@ -178,4 +180,77 @@ async def update_tenant_status(
 ) -> TenantResponse:
     return await service.change_status(
         tenant_id, payload.status, actor=current_user, ctx=build_request_context(request)
+    )
+
+
+_ADMINISTRATOR_NOT_FOUND_RESPONSE: dict[int | str, dict[str, object]] = {
+    404: {
+        "model": ErrorResponse,
+        "description": "Tenant not found, or user is not one of this tenant's administrators",
+    },
+}
+
+
+@router.get(
+    "/tenants/{tenant_id}/administrators",
+    response_model=list[TenantAdministratorResponse],
+    summary="List a tenant's administrators",
+    description=(
+        "Active administrators only (is_superuser or holding the admin/"
+        "super_admin role) - identity fields only, never roles, permissions "
+        "or any tenant business data. Exists solely so a platform admin can "
+        "identify which user to target for a password reset; this is not a "
+        "general user-management listing."
+    ),
+    responses={**_COMMON_ERROR_RESPONSES, **_TENANT_NOT_FOUND_RESPONSE},
+    dependencies=[Depends(require_platform_admin)],
+)
+async def list_tenant_administrators(
+    tenant_id: uuid.UUID,
+    service: TenantService = Depends(get_tenant_service),
+) -> list[TenantAdministratorResponse]:
+    return await service.list_administrators(tenant_id)
+
+
+@router.patch(
+    "/tenants/{tenant_id}/administrators/{user_id}/password",
+    response_model=TenantAdministratorResponse,
+    summary="Reset a tenant administrator's password",
+    description=(
+        "A platform-admin-only escape hatch for a locked-out tenant: sets "
+        "the given password, forces a change on next login "
+        "(must_change_password), and immediately revokes every existing "
+        "session for that user - the same behavior as a tenant admin's own "
+        "PATCH /users/{id}/password. `user_id` must already be an "
+        "administrator (is_superuser or admin/super_admin role) of this "
+        "specific tenant - never an arbitrary tenant user - and this never "
+        "touches is_superuser/is_platform_admin/roles or grants the "
+        "platform admin any ongoing access to the tenant."
+    ),
+    responses={
+        **_COMMON_ERROR_RESPONSES,
+        **_ADMINISTRATOR_NOT_FOUND_RESPONSE,
+        422: {
+            "model": ErrorResponse,
+            "description": (
+                "Cannot reset your own password here, or the new password fails the password policy"
+            ),
+        },
+    },
+    dependencies=[Depends(require_platform_admin)],
+)
+async def reset_tenant_administrator_password(
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    payload: TenantAdministratorPasswordResetRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    service: TenantService = Depends(get_tenant_service),
+) -> TenantAdministratorResponse:
+    return await service.reset_administrator_password(
+        tenant_id,
+        user_id,
+        payload.new_password,
+        actor=current_user,
+        ctx=build_request_context(request),
     )
