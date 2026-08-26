@@ -354,6 +354,9 @@ race a second instance's own migration attempt.
 
 ## 14. Explicitly deferred to later sessions
 
+- Automated off-site database backups — implemented Sprint 19 Session
+  1, see [BACKUP_AND_RECOVERY.md](BACKUP_AND_RECOVERY.md) (no longer
+  deferred).
 - Real VPS provisioning, domain, nginx, and TLS/certbot (Session 4).
 - Log rotation for `backend/logs/app.log`/`error.log` (flagged in
   Session 1's audit, not addressed here — file-based logs are still
