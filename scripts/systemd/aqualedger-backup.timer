@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly schedule for the AquaLedger PostgreSQL backup
+
+[Timer]
+OnCalendar=Sun *-*-* 02:30:00
+# If the VPS is down/rebooting at the scheduled time, run as soon as
+# possible after it comes back instead of silently skipping the week.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

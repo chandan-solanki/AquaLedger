@@ -1,0 +1,12 @@
+[Unit]
+Description=AquaLedger PostgreSQL backup (dump, validate, encrypt, upload to Google Drive)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+# Adjust this path if the repo lives somewhere other than the standard
+# deployment location documented in DEPLOYMENT.md.
+WorkingDirectory=/home/ubuntu/AquaLedger
+ExecStart=/home/ubuntu/AquaLedger/scripts/backup-postgres.sh
