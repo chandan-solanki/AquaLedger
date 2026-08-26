@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 # Production PostgreSQL backup: pg_dump (custom format, run inside the
-# postgres container) -> validate -> upload through the encrypted rclone
-# "gcrypt" remote (Google Drive, client-side encrypted) -> prune retention.
+# postgres container) -> validate -> upload to TWO independent Google
+# Drive destinations -> prune retention on each independently:
+#   1. the encrypted rclone "gcrypt" remote (client-side encrypted
+#      filenames + contents) - the original, still-primary copy.
+#   2. a plain "gdrive" remote with meaningful filenames - an
+#      explicit, user-requested, less-secure raw copy (Sprint 19
+#      Session 2). See BACKUP_AND_RECOVERY.md for the security
+#      trade-off this implies.
+# Retention only ever runs after BOTH uploads succeed - a failure in
+# either one aborts the run before any cleanup.
 #
 # Container name, DB user, and DB name are all resolved dynamically via
 # `docker compose ps` / `docker exec printenv` - nothing here is hardcoded
@@ -16,8 +24,10 @@ COMPOSE_FILE="$REPO_ROOT/docker-compose.prod.yml"
 
 BACKUP_ROOT="${AQUALEDGER_BACKUP_ROOT:-$HOME/backups}"
 RCLONE_REMOTE="${AQUALEDGER_RCLONE_REMOTE:-gcrypt:weekly}"
-LOCAL_RETENTION="${AQUALEDGER_LOCAL_RETENTION:-14}"
 REMOTE_RETENTION="${AQUALEDGER_REMOTE_RETENTION:-8}"
+RAW_RCLONE_REMOTE="${AQUALEDGER_RAW_RCLONE_REMOTE:-gdrive:AquaLedger-Backups/weekly}"
+RAW_REMOTE_RETENTION="${AQUALEDGER_RAW_REMOTE_RETENTION:-8}"
+LOCAL_RETENTION="${AQUALEDGER_LOCAL_RETENTION:-14}"
 MIN_FREE_MB="${AQUALEDGER_MIN_FREE_MB:-500}"
 
 mkdir -p "$BACKUP_ROOT"
@@ -61,7 +71,7 @@ FREE_MB="$(df -Pm "$BACKUP_ROOT" | awk 'NR==2 {print $4}')"
 [ "$FREE_MB" -ge "$MIN_FREE_MB" ] || fail "insufficient disk space (${FREE_MB}MB free, need ${MIN_FREE_MB}MB)"
 
 # --- backup creation: write to a .tmp path, only promote after validation ---
-TIMESTAMP="$(date -u +%Y-%m-%dT%H%M%SZ)"
+TIMESTAMP="$(date -u +%Y-%m-%d_%H%M%S)"
 BASENAME="fisherp_${TIMESTAMP}.dump"
 TMP_PATH="$BACKUP_ROOT/${BASENAME}.tmp"
 FINAL_PATH="$BACKUP_ROOT/${BASENAME}"
@@ -87,21 +97,35 @@ mv "$TMP_PATH" "$FINAL_PATH"
 echo "$CHECKSUM  $BASENAME" >"${FINAL_PATH}.sha256"
 log "Backup validated: $BASENAME size=${SIZE_BYTES}B sha256=${CHECKSUM}"
 
-# --- upload: only a validated, completed backup is ever uploaded ---
-log "Uploading to $RCLONE_REMOTE"
+verify_remote_upload() {
+  local label="$1" remote="$2"
+  local remote_size
+  remote_size="$(rclone size "${remote}/${BASENAME}" --json 2>>"$LOG_FILE" | grep -o '"bytes":[0-9]*' | head -1 | cut -d: -f2 || true)"
+  if [ "$remote_size" != "$SIZE_BYTES" ]; then
+    fail "$label remote size mismatch after upload (local=${SIZE_BYTES}B remote=${remote_size:-missing}) - local backup retained"
+  fi
+  log "$label upload verified: remote size matches local (${SIZE_BYTES}B) at ${remote}/${BASENAME}"
+}
+
+# --- upload 1: encrypted destination (existing, primary copy) - only a
+# validated, completed backup is ever uploaded ---
+log "Uploading (encrypted) to $RCLONE_REMOTE"
 if ! rclone copy "$FINAL_PATH" "${RCLONE_REMOTE}/" --checksum >>"$LOG_FILE" 2>&1; then
-  fail "rclone upload failed (validated local backup retained at $FINAL_PATH)"
+  fail "encrypted upload failed (validated local backup retained at $FINAL_PATH)"
 fi
+verify_remote_upload "Encrypted" "$RCLONE_REMOTE"
 
-REMOTE_SIZE="$(rclone size "${RCLONE_REMOTE}/${BASENAME}" --json 2>>"$LOG_FILE" | grep -o '"bytes":[0-9]*' | head -1 | cut -d: -f2 || true)"
-if [ "$REMOTE_SIZE" != "$SIZE_BYTES" ]; then
-  fail "remote size mismatch after upload (local=${SIZE_BYTES}B remote=${REMOTE_SIZE:-missing}) - local backup retained"
+# --- upload 2: raw/direct destination (Sprint 19 Session 2, user-
+# requested) - plain gdrive remote, no crypt layer, meaningful filename ---
+log "Uploading (raw, unencrypted) to $RAW_RCLONE_REMOTE"
+if ! rclone copy "$FINAL_PATH" "${RAW_RCLONE_REMOTE}/" --checksum >>"$LOG_FILE" 2>&1; then
+  fail "raw upload failed (validated local backup and encrypted remote copy retained)"
 fi
-log "Upload verified: remote size matches local (${SIZE_BYTES}B) at ${RCLONE_REMOTE}/${BASENAME}"
+verify_remote_upload "Raw" "$RAW_RCLONE_REMOTE"
 
-# --- retention: only runs after a fully successful backup+upload above,
-# and only ever trims beyond the keep-count, so it can never remove the
-# last surviving backup. ---
+# --- retention: only runs after BOTH uploads above are fully verified,
+# and only ever trims beyond each keep-count, so it can never remove the
+# last surviving backup from any of the three locations. ---
 mapfile -t LOCAL_BACKUPS < <(ls -1t "$BACKUP_ROOT"/fisherp_*.dump 2>/dev/null || true)
 if [ "${#LOCAL_BACKUPS[@]}" -gt "$LOCAL_RETENTION" ]; then
   for old in "${LOCAL_BACKUPS[@]:$LOCAL_RETENTION}"; do
@@ -113,7 +137,14 @@ fi
 mapfile -t REMOTE_BACKUPS < <(rclone lsf "${RCLONE_REMOTE}/" 2>>"$LOG_FILE" | grep '^fisherp_.*\.dump$' | sort -r || true)
 if [ "${#REMOTE_BACKUPS[@]}" -gt "$REMOTE_RETENTION" ]; then
   for old in "${REMOTE_BACKUPS[@]:$REMOTE_RETENTION}"; do
-    rclone deletefile "${RCLONE_REMOTE}/${old}" && log "Retention: removed remote $old"
+    rclone deletefile "${RCLONE_REMOTE}/${old}" && log "Retention: removed encrypted remote $old"
+  done
+fi
+
+mapfile -t RAW_REMOTE_BACKUPS < <(rclone lsf "${RAW_RCLONE_REMOTE}/" 2>>"$LOG_FILE" | grep '^fisherp_.*\.dump$' | sort -r || true)
+if [ "${#RAW_REMOTE_BACKUPS[@]}" -gt "$RAW_REMOTE_RETENTION" ]; then
+  for old in "${RAW_REMOTE_BACKUPS[@]:$RAW_REMOTE_RETENTION}"; do
+    rclone deletefile "${RAW_RCLONE_REMOTE}/${old}" && log "Retention: removed raw remote $old"
   done
 fi
 
