@@ -164,3 +164,7 @@ build/
 # ============================================================
 
 .envrc
+
+# Raw favicon.io source drop - not part of the app, the generated
+# icons actually used live under frontend/public and frontend/src/app.
+/favicon_io/
