@@ -25,6 +25,7 @@ export function getCompanyColumns(
       accessorKey: "name",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Company Name" />,
       cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
+      enableHiding: false,
     },
     {
       accessorKey: "code",

@@ -25,6 +25,7 @@ export function getSupplierColumns(
       accessorKey: "name",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Supplier Name" />,
       cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
+      enableHiding: false,
     },
     {
       accessorKey: "code",

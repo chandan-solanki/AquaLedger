@@ -32,6 +32,7 @@ export function getPurchaseBillColumns(
       accessorKey: "billNumber",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Bill Number" />,
       cell: ({ row }) => <span className="font-medium">{row.original.billNumber ?? "—"}</span>,
+      enableHiding: false,
     },
     {
       id: "supplier",

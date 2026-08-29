@@ -20,6 +20,7 @@ export function getTenantColumns(): DataTableColumn<Tenant>[] {
       accessorKey: "name",
       header: "Tenant Name",
       cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
+      enableHiding: false,
     },
     {
       accessorKey: "slug",

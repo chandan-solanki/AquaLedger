@@ -35,6 +35,7 @@ export function getDeliveryChallanColumns(
       accessorKey: "challanNumber",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Challan Number" />,
       cell: ({ row }) => <span className="font-medium">{row.original.challanNumber ?? "—"}</span>,
+      enableHiding: false,
     },
     {
       id: "challan_date",

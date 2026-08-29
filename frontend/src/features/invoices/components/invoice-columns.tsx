@@ -36,6 +36,7 @@ export function getInvoiceColumns(
       accessorKey: "invoiceNumber",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Invoice Number" />,
       cell: ({ row }) => <span className="font-medium">{row.original.invoiceNumber ?? "—"}</span>,
+      enableHiding: false,
     },
     {
       id: "company",

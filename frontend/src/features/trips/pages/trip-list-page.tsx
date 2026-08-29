@@ -8,10 +8,12 @@ import type { SortingState } from "@tanstack/react-table";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { DeleteConfirmationDialog } from "@/components/feedback/dialogs/delete-confirmation-dialog";
@@ -51,6 +53,7 @@ export function TripListPage() {
   const [filters, setFilters] = useTripFilters();
   const [searchKey, reportSearch] = useExternalValueKey(filters.search);
   const [pendingDelete, setPendingDelete] = useState<Trip | null>(null);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("trips-list-columns");
 
   const listQuery = useTrips(filters);
   const boatOptions = useBoatOptions();
@@ -100,6 +103,8 @@ export function TripListPage() {
   const table = useDataTable({
     data: trips,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -210,6 +215,7 @@ export function TripListPage() {
                     />
                   </AdvancedFilter>
                 }
+                viewOptions={<DataTableColumnToggle table={table} />}
               />
 
               <AppliedFilters

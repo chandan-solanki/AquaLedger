@@ -55,6 +55,30 @@ export interface DataTableProps<TData> {
   className?: string;
 }
 
+/**
+ * Pure-CSS "scroll shadow" cue for the horizontally-scrollable wrapper, per
+ * `05_PAGE_CATALOG.md` §0's "user must be able to tell more columns exist"
+ * requirement — most relevant on touch devices, where the scrollbar itself
+ * is usually invisible until an active drag. The two `local`-attached cover
+ * gradients scroll with the table and exactly mask the two `scroll`-attached
+ * edge shadows whenever there's nothing further to scroll to in that
+ * direction (including when the table doesn't overflow at all); moving away
+ * from an edge uncovers that edge's shadow. No JS/scroll-listener involved.
+ */
+const SCROLL_SHADOW_STYLE: CSSProperties = {
+  backgroundImage: [
+    "linear-gradient(to right, var(--background) 30%, transparent)",
+    "linear-gradient(to left, var(--background) 30%, transparent)",
+    "radial-gradient(farthest-side at 0% 50%, color-mix(in oklch, var(--foreground) 18%, transparent), transparent)",
+    "radial-gradient(farthest-side at 100% 50%, color-mix(in oklch, var(--foreground) 18%, transparent), transparent)",
+  ].join(", "),
+  backgroundRepeat: "no-repeat",
+  backgroundColor: "var(--background)",
+  backgroundSize: "24px 100%, 24px 100%, 10px 100%, 10px 100%",
+  backgroundPosition: "left, right, left, right",
+  backgroundAttachment: "local, local, scroll, scroll",
+};
+
 function getPinningStyle<TData, TValue>(
   column: Column<TData, TValue>,
   isFirst: boolean,
@@ -133,7 +157,7 @@ export function DataTable<TData>({
 
       <div
         className={cn("w-full overflow-auto rounded-lg border", className)}
-        style={maxHeight ? { maxHeight } : undefined}
+        style={maxHeight ? { ...SCROLL_SHADOW_STYLE, maxHeight } : SCROLL_SHADOW_STYLE}
       >
         <table
           role="table"

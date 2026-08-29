@@ -32,6 +32,7 @@ export function getTripColumns(
       accessorKey: "tripNumber",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Trip Number" />,
       cell: ({ row }) => <span className="font-medium">{row.original.tripNumber}</span>,
+      enableHiding: false,
     },
     {
       id: "boat",

@@ -8,10 +8,12 @@ import type { SortingState } from "@tanstack/react-table";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { AdvancedFilter, AppliedFilters, SearchBar, StatusFilter } from "@/components/filters";
@@ -60,6 +62,7 @@ export function SupplierPaymentListPage() {
   const [filters, setFilters] = useSupplierPaymentFilters();
   const [searchKey, reportSearch] = useExternalValueKey(filters.search);
   const [pendingDelete, setPendingDelete] = useState<SupplierPayment | null>(null);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("supplier-payments-list-columns");
 
   const listQuery = useSupplierPayments(filters);
   const supplierOptions = useSupplierOptions();
@@ -111,6 +114,8 @@ export function SupplierPaymentListPage() {
   const table = useDataTable({
     data: supplierPayments,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -241,6 +246,7 @@ export function SupplierPaymentListPage() {
                     />
                   </AdvancedFilter>
                 }
+                viewOptions={<DataTableColumnToggle table={table} />}
               />
 
               <AppliedFilters

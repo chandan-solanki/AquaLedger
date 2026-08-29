@@ -31,6 +31,7 @@ export function getPurchaseOrderColumns(
       accessorKey: "poNumber",
       header: ({ column }) => <DataTableColumnHeader column={column} title="PO Number" />,
       cell: ({ row }) => <span className="font-medium">{row.original.poNumber ?? "—"}</span>,
+      enableHiding: false,
     },
     {
       id: "supplier",

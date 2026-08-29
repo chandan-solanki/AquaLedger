@@ -67,7 +67,10 @@ export function AdvancedFilter({
           <FilterBadge count={activeCount} />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className={cn("w-80 p-4", contentClassName)}>
+      <PopoverContent
+        align="end"
+        className={cn("w-[calc(100vw-2rem)] p-4 sm:w-80", contentClassName)}
+      >
         <div className="flex flex-col gap-4">
           {children}
 

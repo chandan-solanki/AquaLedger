@@ -25,6 +25,7 @@ export function getFishColumns(rowActions: (fish: Fish) => DataTableAction<Fish>
       accessorKey: "name",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Fish Name" />,
       cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
+      enableHiding: false,
     },
     {
       accessorKey: "scientificName",

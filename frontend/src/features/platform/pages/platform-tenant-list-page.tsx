@@ -7,10 +7,12 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { AdvancedFilter, AppliedFilters, SearchBar, StatusFilter } from "@/components/filters";
@@ -36,6 +38,7 @@ export function PlatformTenantListPage() {
   const router = useRouter();
   const [filters, setFilters] = useTenantFilters();
   const [searchKey, reportSearch] = useExternalValueKey(filters.search);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("platform-tenants-list-columns");
 
   const listQuery = useTenants(filters);
   const tenants = listQuery.data?.data ?? [];
@@ -71,6 +74,8 @@ export function PlatformTenantListPage() {
   const table = useDataTable({
     data: tenants,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     pageCount: Math.max(1, Math.ceil(totalCount / filters.pageSize)),
   });
 
@@ -150,6 +155,7 @@ export function PlatformTenantListPage() {
                   />
                 </AdvancedFilter>
               }
+              viewOptions={<DataTableColumnToggle table={table} />}
             />
 
             <AppliedFilters

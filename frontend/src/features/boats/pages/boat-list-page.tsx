@@ -8,10 +8,12 @@ import type { SortingState } from "@tanstack/react-table";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { DeleteConfirmationDialog } from "@/components/feedback/dialogs/delete-confirmation-dialog";
@@ -79,6 +81,7 @@ export function BoatListPage() {
   const { hasPermission } = usePermissions();
   const [filters, setFilters] = useBoatFilters();
   const [pendingDelete, setPendingDelete] = useState<Boat | null>(null);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("boats-list-columns");
 
   const [searchKey, reportSearch] = useExternalValueKey(filters.search);
   const [boatTypeKey, reportBoatType] = useExternalValueKey(filters.boatType);
@@ -133,6 +136,8 @@ export function BoatListPage() {
   const table = useDataTable({
     data: boats,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -260,6 +265,7 @@ export function BoatListPage() {
                     />
                   </AdvancedFilter>
                 }
+                viewOptions={<DataTableColumnToggle table={table} />}
               />
 
               <AppliedFilters

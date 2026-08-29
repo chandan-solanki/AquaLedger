@@ -105,12 +105,16 @@ export function DashboardMiniTable<T>({
                           : undefined
                       }
                     >
-                      {columns.map((column) => (
+                      {columns.map((column, index) => (
                         <td
                           key={column.key}
                           className={cn("py-2", column.align === "right" ? "text-right" : "text-left")}
                         >
-                          {column.render(row)}
+                          {index === 0 ? (
+                            <div className="max-w-32 truncate sm:max-w-none">{column.render(row)}</div>
+                          ) : (
+                            column.render(row)
+                          )}
                         </td>
                       ))}
                     </tr>

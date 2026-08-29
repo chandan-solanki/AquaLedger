@@ -26,13 +26,19 @@ export function useColumnVisibility(
     try {
       const raw = window.localStorage.getItem(storageKey);
       if (raw) {
-        setColumnVisibility((current) => ({
-          ...current,
-          ...(JSON.parse(raw) as VisibilityState),
-        }));
+        // `JSON.parse` must run here, synchronously inside the `try`, not
+        // inside the `setColumnVisibility` updater below — React defers
+        // running a functional updater to the render phase, by which point
+        // this `try/catch`'s stack frame is long gone, so a parse error
+        // thrown from inside the updater would crash the render instead of
+        // being caught here (confirmed live: corrupt JSON in localStorage
+        // took down the whole page despite this catch block existing).
+        const parsed = JSON.parse(raw) as VisibilityState;
+        setColumnVisibility((current) => ({ ...current, ...parsed }));
       }
     } catch {
-      // localStorage unavailable (private browsing, disabled) — visibility still works for this session.
+      // localStorage unavailable (private browsing, disabled) or its stored
+      // value is corrupt — ignore and keep `initialState` for this session.
     }
     // Only re-read when the key itself changes; `initialState` is a fresh object per render by nature of most callers.
   }, [storageKey]);

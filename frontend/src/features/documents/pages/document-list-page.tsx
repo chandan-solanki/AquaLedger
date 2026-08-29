@@ -8,10 +8,12 @@ import type { DateRange } from "react-day-picker";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { AdvancedFilter, AppliedFilters, DateRangeFilter, SearchBar, StatusFilter } from "@/components/filters";
@@ -59,6 +61,7 @@ export function DocumentListPage() {
   const { hasPermission } = usePermissions();
   const [filters, setFilters] = useDocumentFilters();
   const [searchKey, reportSearch] = useExternalValueKey(filters.search);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("documents-list-columns");
 
   const listQuery = useDocuments(filters);
   const documents = listQuery.data?.data ?? [];
@@ -108,6 +111,8 @@ export function DocumentListPage() {
   const table = useDataTable({
     data: documents,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -224,6 +229,7 @@ export function DocumentListPage() {
                   />
                 </AdvancedFilter>
               }
+              viewOptions={<DataTableColumnToggle table={table} />}
             />
 
             <AppliedFilters

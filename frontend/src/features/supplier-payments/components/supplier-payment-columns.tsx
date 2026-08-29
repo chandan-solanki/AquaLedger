@@ -34,6 +34,7 @@ export function getSupplierPaymentColumns(
       accessorKey: "paymentNumber",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Payment Number" />,
       cell: ({ row }) => <span className="font-medium">{row.original.paymentNumber ?? "—"}</span>,
+      enableHiding: false,
     },
     {
       id: "supplier",

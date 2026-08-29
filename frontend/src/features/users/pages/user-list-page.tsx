@@ -8,10 +8,12 @@ import type { SortingState } from "@tanstack/react-table";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { ConfirmationDialog } from "@/components/feedback/dialogs/confirmation-dialog";
@@ -45,6 +47,7 @@ export function UserListPage() {
   const { hasPermission } = usePermissions();
   const [filters, setFilters] = useUserFilters();
   const [pendingStatusChange, setPendingStatusChange] = useState<ManagedUser | null>(null);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("users-list-columns");
 
   const listQuery = useUsers(filters);
   const roleOptionsQuery = useRoleOptions();
@@ -80,6 +83,8 @@ export function UserListPage() {
   const table = useDataTable({
     data: users,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -189,6 +194,7 @@ export function UserListPage() {
                     />
                   </AdvancedFilter>
                 }
+                viewOptions={<DataTableColumnToggle table={table} />}
               />
 
               <AppliedFilters

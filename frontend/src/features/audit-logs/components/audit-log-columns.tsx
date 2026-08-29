@@ -68,6 +68,7 @@ export function getAuditLogColumns(): DataTableColumn<AuditLogEntry>[] {
       accessorKey: "createdAt",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Date" />,
       cell: ({ row }) => formatDateTime(row.original.createdAt),
+      enableHiding: false,
     },
     {
       id: "actor",

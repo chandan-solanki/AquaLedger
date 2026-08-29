@@ -25,6 +25,7 @@ export function getUserColumns(
       accessorKey: "fullName",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Name" />,
       cell: ({ row }) => <span className="font-medium">{row.original.fullName}</span>,
+      enableHiding: false,
     },
     {
       accessorKey: "email",

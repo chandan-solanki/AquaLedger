@@ -8,10 +8,12 @@ import type { DateRange } from "react-day-picker";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { AdvancedFilter, AppliedFilters, DateRangeFilter, SearchBar, StatusFilter } from "@/components/filters";
@@ -59,6 +61,7 @@ function toDateRange(filters: AuditLogFilters): DateRange | undefined {
 export function AuditLogListPage() {
   const { hasPermission } = usePermissions();
   const [filters, setFilters] = useAuditLogFilters();
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("audit-logs-list-columns");
 
   const listQuery = useAuditLogs(filters);
   const actorOptionsQuery = useActorOptions();
@@ -108,6 +111,8 @@ export function AuditLogListPage() {
   const table = useDataTable({
     data: auditLogs,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -241,6 +246,7 @@ export function AuditLogListPage() {
                   />
                 </AdvancedFilter>
               }
+              viewOptions={<DataTableColumnToggle table={table} />}
             />
 
             <AppliedFilters

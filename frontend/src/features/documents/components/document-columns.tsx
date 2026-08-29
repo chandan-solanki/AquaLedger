@@ -76,6 +76,7 @@ export function getDocumentColumns(
       id: "document_number",
       accessorKey: "documentNumber",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Document Number" />,
+      enableHiding: false,
       cell: ({ row }) => {
         const { sourceType, sourceId, documentNumber } = row.original;
         const href = getSourceHref(sourceType, sourceId);

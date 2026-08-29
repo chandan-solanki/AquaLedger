@@ -111,7 +111,7 @@ export function FishSalesPage() {
   }
 
   const filterBar = (
-    <div className="flex flex-wrap items-end gap-3">
+    <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:items-end">
       <SearchBar
         key={searchKey}
         defaultValue={filters.search}

@@ -8,10 +8,12 @@ import type { SortingState } from "@tanstack/react-table";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { AdvancedFilter, AppliedFilters, SearchBar, StatusFilter } from "@/components/filters";
@@ -52,6 +54,7 @@ export function InvoiceListPage() {
   const [filters, setFilters] = useInvoiceFilters();
   const [searchKey, reportSearch] = useExternalValueKey(filters.search);
   const [pendingDelete, setPendingDelete] = useState<Invoice | null>(null);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("invoices-list-columns");
 
   const listQuery = useInvoices(filters);
   const companyOptions = useCompanyOptions();
@@ -101,6 +104,8 @@ export function InvoiceListPage() {
   const table = useDataTable({
     data: invoices,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -211,6 +216,7 @@ export function InvoiceListPage() {
                     />
                   </AdvancedFilter>
                 }
+                viewOptions={<DataTableColumnToggle table={table} />}
               />
 
               <AppliedFilters

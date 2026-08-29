@@ -8,10 +8,12 @@ import type { SortingState } from "@tanstack/react-table";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { DeleteConfirmationDialog } from "@/components/feedback/dialogs/delete-confirmation-dialog";
@@ -73,6 +75,7 @@ export function CompanyListPage() {
   const { hasPermission } = usePermissions();
   const [filters, setFilters] = useCompanyFilters();
   const [pendingDelete, setPendingDelete] = useState<Company | null>(null);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("companies-list-columns");
 
   const [searchKey, reportSearch] = useExternalValueKey(filters.search);
   const [cityKey, reportCity] = useExternalValueKey(filters.city);
@@ -121,6 +124,8 @@ export function CompanyListPage() {
   const table = useDataTable({
     data: companies,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -233,6 +238,7 @@ export function CompanyListPage() {
                     />
                   </AdvancedFilter>
                 }
+                viewOptions={<DataTableColumnToggle table={table} />}
               />
 
               <AppliedFilters

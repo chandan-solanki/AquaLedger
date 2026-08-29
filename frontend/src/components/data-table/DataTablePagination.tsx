@@ -74,7 +74,7 @@ export function DataTablePagination({
     <div
       data-slot="data-table-pagination"
       className={cn(
-        "flex flex-wrap items-center justify-between gap-4 px-1 py-1",
+        "flex flex-wrap items-center justify-between gap-3 px-1 py-1 sm:gap-4",
         className
       )}
     >
@@ -86,7 +86,7 @@ export function DataTablePagination({
             : `Showing ${from}–${to} of ${totalCount}`}
       </p>
 
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-4">
         {showPageSizeSelector && onPageSizeChange && (
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground whitespace-nowrap">Rows per page</span>
@@ -116,7 +116,7 @@ export function DataTablePagination({
         </p>
 
         {showJumpToPage && pageCount > 1 && (
-          <form onSubmit={handleJump} className="flex items-center gap-1.5">
+          <form onSubmit={handleJump} className="hidden items-center gap-1.5 sm:flex">
             <label
               htmlFor="data-table-jump-to-page"
               className="text-sm text-muted-foreground whitespace-nowrap"

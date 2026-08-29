@@ -10,10 +10,12 @@ import type { SortingState } from "@tanstack/react-table";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { AdvancedFilter, AppliedFilters, DateRangeFilter, SearchBar, StatusFilter } from "@/components/filters";
@@ -66,6 +68,7 @@ export function DeliveryChallanListPage() {
   const { hasPermission } = usePermissions();
   const [filters, setFilters] = useDeliveryChallanFilters();
   const [searchKey, reportSearch] = useExternalValueKey(filters.search);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("delivery-challans-list-columns");
 
   const listQuery = useDeliveryChallans(filters);
   const invoiceOptions = useInvoiceOptions();
@@ -115,6 +118,8 @@ export function DeliveryChallanListPage() {
   const table = useDataTable({
     data: deliveryChallans,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -246,6 +251,7 @@ export function DeliveryChallanListPage() {
                   />
                 </AdvancedFilter>
               }
+              viewOptions={<DataTableColumnToggle table={table} />}
             />
 
             <AppliedFilters

@@ -10,10 +10,12 @@ import type { SortingState } from "@tanstack/react-table";
 
 import {
   DataTable,
+  DataTableColumnToggle,
   DataTableEmpty,
   DataTableNoResults,
   DataTablePagination,
   DataTableToolbar,
+  useColumnVisibility,
   useDataTable,
 } from "@/components/data-table";
 import { AdvancedFilter, AppliedFilters, DateRangeFilter, SearchBar, StatusFilter } from "@/components/filters";
@@ -60,6 +62,7 @@ export function PurchaseOrderListPage() {
   const { hasPermission } = usePermissions();
   const [filters, setFilters] = usePurchaseOrderFilters();
   const [searchKey, reportSearch] = useExternalValueKey(filters.search);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility("purchase-orders-list-columns");
 
   const listQuery = usePurchaseOrders(filters);
   const supplierOptions = useSupplierOptions();
@@ -109,6 +112,8 @@ export function PurchaseOrderListPage() {
   const table = useDataTable({
     data: purchaseOrders,
     columns,
+    columnVisibility,
+    onColumnVisibilityChange: setColumnVisibility,
     sorting,
     onSortingChange: (updater) => {
       const [next] = typeof updater === "function" ? updater(sorting) : updater;
@@ -245,6 +250,7 @@ export function PurchaseOrderListPage() {
                   />
                 </AdvancedFilter>
               }
+              viewOptions={<DataTableColumnToggle table={table} />}
             />
 
             <AppliedFilters
