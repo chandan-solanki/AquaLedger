@@ -136,6 +136,19 @@ it.
 
 ## 4. Checking backup status
 
+**Quick health check** (single JSON object, overwritten every run —
+Sprint 19 Session 3):
+
+```bash
+cat ~/backups/status.json
+```
+
+Fields: `last_run_utc`, `result` (`success`/`failure`), `reason` (empty
+on success), `basename`, `size_bytes`, `encrypted_uploaded`,
+`raw_uploaded`. This is the fastest way to answer "did last week's
+backup actually work?" without reading the full log — but it only
+reflects the *most recent* run; check the log (below) for history.
+
 **Logs** (append-only, one line per event — never contains passwords,
 tokens, or the encryption password):
 
@@ -172,8 +185,18 @@ rclone lsl gdrive:AquaLedger-Backups/weekly/
 ```bash
 systemctl status aqualedger-backup.timer
 systemctl list-timers aqualedger-backup.timer
+systemctl is-failed aqualedger-backup.service   # "active" or "failed", not "unknown"
 journalctl -u aqualedger-backup.service --since "-14 days"
 ```
+
+## 4a. Backup file permissions
+
+`~/backups/` is `700` and every file inside it (`.dump`, `.sha256`,
+`backup.log`, `status.json`) is `600` — owner (`ubuntu`) only, no
+group/other read access. The script enforces this explicitly on every
+run (Sprint 19 Session 3) rather than relying on the shell's umask,
+since this host's default umask (`002`) would otherwise leave backups
+group *and* world-readable to any other local account.
 
 ## 5. Retention policy
 
@@ -241,7 +264,30 @@ inaccessible.
 | Crypt encryption password/salt (only needed if restoring from the *encrypted* destination) | Wherever you stored the password after §1 above | **No** — you must have your own saved copy, or the encrypted destination's dumps are permanently unreadable. **The raw destination does not need this at all**, which is precisely why it exists. |
 
 Do not assume a database backup alone is a full disaster-recovery
-package — it explicitly is not.
+package — it explicitly is not. Full recovery requires five genuinely
+separate artifacts, only one of which this backup pipeline provides:
+
+- **A. Database backup** — from Google Drive (encrypted or raw). This
+  is what this document's pipeline protects.
+- **B. Application source code** — from GitHub (`git clone`), not from
+  any backup.
+- **C. Application secrets/config** (`JWT_SECRET_KEY`, `.env`,
+  `backend/.env`, `POSTGRES_PASSWORD`, CORS origins) — lives only on
+  the VPS, never committed, never backed up by this pipeline. Must be
+  regenerated from scratch on a replacement host.
+- **D. Google Drive/rclone authentication** (the `rclone.conf` token,
+  and the crypt password/salt if restoring from the encrypted
+  destination) — lives only on the VPS (token) and wherever you saved
+  the crypt password yourself (§1). Must be re-authorized/re-entered on
+  a replacement host; this pipeline does not back up its own
+  credentials.
+- **E. VPS rebuild + Docker/application redeployment** — provisioning,
+  Docker Engine + rclone install, `docker compose up`, nginx/TLS — see
+  DEPLOYMENT.md.
+
+The table below maps each artifact to where it actually lives; the
+numbered sequence after it is the order of operations that ties A–E
+together into a working system again.
 
 **Recovery sequence:**
 
@@ -332,5 +378,20 @@ package — it explicitly is not.
 - This file — documented the dual-destination architecture and the
   unencrypted-storage security trade-off (§1a).
 
-Nothing in either session touched application code, Alembic migrations,
+**Session 3 (operational hardening — no architecture change):**
+- `scripts/backup-postgres.sh` — explicit `chmod 700`/`600` on the
+  backup directory and every file it creates (dumps, checksums, log,
+  new status file), independent of the shell's umask; added
+  `status.json` for at-a-glance health checks (§4).
+- `scripts/systemd/aqualedger-backup.service` — added `TimeoutStartSec=
+  1800` (previously unbounded — a hung upload could have blocked the
+  lock forever) and `NoNewPrivileges=true`.
+- This file — added §4a (backup file permissions), restructured §7 with
+  an explicit A–E artifact breakdown for disaster recovery.
+- Removed a pre-Session-1 leftover test file
+  (`fisherp_20260825T181553Z.sql`) and two dangling anonymous Docker
+  volumes left over from earlier restore drills — housekeeping only,
+  no production data affected.
+
+Nothing in any session touched application code, Alembic migrations,
 or the frontend/backend business logic.

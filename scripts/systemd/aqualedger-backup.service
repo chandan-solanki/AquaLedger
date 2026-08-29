@@ -10,3 +10,17 @@ User=ubuntu
 # deployment location documented in DEPLOYMENT.md.
 WorkingDirectory=/home/ubuntu/AquaLedger
 ExecStart=/home/ubuntu/AquaLedger/scripts/backup-postgres.sh
+# Without this, a oneshot unit's default timeout is unbounded here
+# (verified: TimeoutStartUSec=infinity) - a hung network call (e.g. a
+# stalled Google Drive upload) would hold the script's flock forever and
+# silently block every future scheduled run. 30 minutes is enormously
+# generous for a backup that normally completes in well under a minute,
+# so this only ever bites a genuine hang.
+TimeoutStartSec=1800
+# Safe, no-cost sandboxing: this script never needs to gain privileges
+# via setuid/setgid/file capabilities, and `ubuntu` already has docker
+# group membership for socket access - NoNewPrivileges doesn't affect
+# that. Nothing stronger (ProtectSystem/ProtectHome) is used here since
+# the script needs full read/write access to $HOME (backups, rclone
+# config) and the repo tree.
+NoNewPrivileges=true

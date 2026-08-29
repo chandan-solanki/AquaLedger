@@ -31,12 +31,31 @@ LOCAL_RETENTION="${AQUALEDGER_LOCAL_RETENTION:-14}"
 MIN_FREE_MB="${AQUALEDGER_MIN_FREE_MB:-500}"
 
 mkdir -p "$BACKUP_ROOT"
+# Backup dumps are full production database contents - never leave them
+# readable by other local accounts regardless of the invoking shell's
+# umask (this host's default umask is 002, which would otherwise leave
+# both the directory and every file group/world-readable).
+chmod 700 "$BACKUP_ROOT"
 LOCK_FILE="$BACKUP_ROOT/.backup.lock"
 LOG_FILE="${AQUALEDGER_BACKUP_LOG:-$BACKUP_ROOT/backup.log}"
+STATUS_FILE="$BACKUP_ROOT/status.json"
 touch "$LOG_FILE"
+chmod 600 "$LOG_FILE"
 
 log() {
   printf '%s %s\n' "$(date -u +%FT%TZ)" "$1" >>"$LOG_FILE"
+}
+
+# --- lightweight status file for at-a-glance health checks (Sprint 19
+# Session 3) - a single JSON object, overwritten each run. Not a
+# substitute for the log, just a fast "did the last run succeed" check
+# that doesn't require parsing log lines. ---
+write_status() {
+  local result="$1" reason="${2:-}"
+  printf '{"last_run_utc":"%s","result":"%s","reason":"%s","basename":"%s","size_bytes":"%s","encrypted_uploaded":%s,"raw_uploaded":%s}\n' \
+    "$(date -u +%FT%TZ)" "$result" "$reason" "${BASENAME:-}" "${SIZE_BYTES:-}" \
+    "${ENCRYPTED_UPLOADED:-false}" "${RAW_UPLOADED:-false}" >"$STATUS_FILE"
+  chmod 600 "$STATUS_FILE"
 }
 
 # --- locking: refuse to run if another backup is already in progress ---
@@ -48,8 +67,12 @@ fi
 
 log "START backup run"
 
+ENCRYPTED_UPLOADED=false
+RAW_UPLOADED=false
+
 fail() {
   log "FAIL: $1"
+  write_status "failure" "$1"
   exit 1
 }
 
@@ -95,6 +118,7 @@ SIZE_BYTES="$(stat -c%s "$TMP_PATH")"
 
 mv "$TMP_PATH" "$FINAL_PATH"
 echo "$CHECKSUM  $BASENAME" >"${FINAL_PATH}.sha256"
+chmod 600 "$FINAL_PATH" "${FINAL_PATH}.sha256"
 log "Backup validated: $BASENAME size=${SIZE_BYTES}B sha256=${CHECKSUM}"
 
 verify_remote_upload() {
@@ -114,6 +138,7 @@ if ! rclone copy "$FINAL_PATH" "${RCLONE_REMOTE}/" --checksum >>"$LOG_FILE" 2>&1
   fail "encrypted upload failed (validated local backup retained at $FINAL_PATH)"
 fi
 verify_remote_upload "Encrypted" "$RCLONE_REMOTE"
+ENCRYPTED_UPLOADED=true
 
 # --- upload 2: raw/direct destination (Sprint 19 Session 2, user-
 # requested) - plain gdrive remote, no crypt layer, meaningful filename ---
@@ -122,6 +147,7 @@ if ! rclone copy "$FINAL_PATH" "${RAW_RCLONE_REMOTE}/" --checksum >>"$LOG_FILE" 
   fail "raw upload failed (validated local backup and encrypted remote copy retained)"
 fi
 verify_remote_upload "Raw" "$RAW_RCLONE_REMOTE"
+RAW_UPLOADED=true
 
 # --- retention: only runs after BOTH uploads above are fully verified,
 # and only ever trims beyond each keep-count, so it can never remove the
@@ -149,4 +175,5 @@ if [ "${#RAW_REMOTE_BACKUPS[@]}" -gt "$RAW_REMOTE_RETENTION" ]; then
 fi
 
 log "COMPLETE backup run: $BASENAME OK"
+write_status "success"
 exit 0
