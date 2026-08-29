@@ -21,8 +21,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "Starting backend (uvicorn --reload) on http://localhost:8000 ..."
-(cd "$BACKEND_DIR" && uv run uvicorn app.main:app --reload) &
+echo "Starting backend (uvicorn --reload) on http://localhost:8001 ..."
+(cd "$BACKEND_DIR" && uv run uvicorn app.main:app --reload --port 8001) &
 pids+=($!)
 
 echo "Starting frontend (next dev --turbopack) on http://localhost:3000 ..."
