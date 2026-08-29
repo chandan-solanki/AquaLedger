@@ -63,11 +63,12 @@ existing good backup untouched everywhere.
 - **Off-site**: both destinations are the same Google account's Drive
   storage, not another directory or volume on the same VPS — both
   survive total VPS loss.
-- **Google OAuth client**: this setup uses rclone's shared/default
-  Google API client. rclone itself warns this shared client "is being
-  retired and will stop working during 2026" — see §5 below for what
-  that means and how to move to a personal OAuth client before it
-  breaks the schedule.
+- **Google OAuth client**: as of Sprint 19 Session 4, this setup uses a
+  **dedicated personal Google Cloud OAuth client** (Desktop app type),
+  created and owned by the account owner — not rclone's shared/default
+  client. The retirement warning rclone used to print on every run is
+  gone (verified live). See §6 for how this was migrated, where the
+  client credentials live, and how to recover/rotate them.
 
 ### 1a. Security warning — the raw backup is unencrypted
 
@@ -222,31 +223,60 @@ group *and* world-readable to any other local account.
   disk-pressure necessity. Revisit only if real data volume grows
   enough to matter.
 
-## 6. Moving off the shared Google OAuth client (before it's retired)
+## 6. Google OAuth client (migrated off the shared client — Sprint 19 Session 4)
 
-rclone's own client warned during setup that its shared Google Drive
-API client "is being retired and will stop working during 2026." This
-setup currently relies on it. Before it's retired, create a personal
-OAuth client so backups don't silently start failing:
+**Done.** The `gdrive` remote (and therefore `gcrypt`, which sits on top
+of it) now authenticates through a **dedicated personal Google Cloud
+OAuth client**, owned by the account owner, instead of rclone's
+shared/default client. rclone's retirement warning no longer appears on
+any run — verified live before and after migration.
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/),
-   create a project (or reuse one), enable the **Google Drive API**,
-   and configure an OAuth consent screen (Testing mode is fine for a
-   single personal account).
-2. Create an **OAuth client ID** of type **Desktop app**. Download/copy
-   the Client ID and Client Secret — treat the secret exactly like a
-   password (never commit it, never paste it anywhere but rclone's own
-   config prompt).
-3. On the VPS: `rclone config` → edit the `gdrive` remote → supply the
-   new `client_id`/`client_secret` → re-authorize (same headless-SSH-
-   tunnel browser flow used for initial setup — see the Sprint 19
-   Session 1 chat log for the exact steps if needed).
-4. Verify with `rclone lsd gdrive:` before considering it done.
+**What exists now, and where:**
 
-This is a known, real deadline — not a hypothetical — but wasn't
-completed in this session because it requires interactive steps in the
-Google Cloud Console (project/consent-screen/client creation) that only
-the account owner can perform via a browser.
+- A Google Cloud project + OAuth consent screen (Testing mode, the
+  account owner added as a test user) + one OAuth client ID (**Desktop
+  app** type) — all created and owned by the account owner in their own
+  Google Cloud Console. This project/client is **not** managed by this
+  repository or this pipeline in any way.
+- The client ID + client secret are stored **only** inside
+  `~/.config/rclone/rclone.conf` on the VPS (`600`, owner-only) as the
+  `gdrive` remote's `client_id`/`client_secret` fields. **They are not
+  backed up by this pipeline, not committed, and not written anywhere
+  else.** If you want a recovery copy, save them yourself (e.g. in a
+  password manager) the same way you saved the crypt password in §1 —
+  this document does not do that for you.
+- The Drive-access token itself (what actually authorizes API calls)
+  also lives only in `rclone.conf`, refreshed automatically by rclone
+  as needed — no interactive login is required for normal operation,
+  including through systemd (verified).
+
+**If the token ever expires or is revoked** (e.g. you revoke access
+from `myaccount.google.com/permissions`, or don't use it for an
+extended period and Google expires it — routine for a Testing-mode
+app): backups will start failing with an auth error in `backup.log`/
+`status.json`. Re-authorize with:
+
+```bash
+rclone config reconnect gdrive:
+```
+
+This reuses the same client ID/secret already stored in `rclone.conf`
+and only needs the same headless-SSH-tunnel browser flow used for the
+original migration (SSH local port-forward on `53682`, open the printed
+URL in your own browser, approve access). It does not touch the
+`gcrypt` remote, existing backups, or retention settings.
+
+**To rotate the client secret** (e.g. if it's ever accidentally
+exposed): in Google Cloud Console → Credentials → click the OAuth
+client → reset/regenerate the secret, then run
+`rclone config update gdrive client_secret "<new secret>" --non-interactive`
+followed by `rclone config reconnect gdrive:` to re-authorize under it.
+
+**Recreating this from scratch** (e.g. on a replacement VPS, or if the
+Google Cloud project itself is ever deleted) requires repeating the
+manual Google Cloud Console steps once (project → enable Drive API →
+consent screen → test user → OAuth client) — see §7 step 5 for exactly
+when this applies during disaster recovery.
 
 ## 7. Disaster recovery: total VPS loss
 
@@ -260,7 +290,7 @@ inaccessible.
 | Database contents | Google Drive (encrypted *or* raw — either works, see step 5/7 below) | Yes — this is the point of this doc |
 | Application code | GitHub | Yes — `git clone` |
 | Runtime secrets (`JWT_SECRET_KEY`, `DATABASE_URL`, `POSTGRES_PASSWORD`, CORS origin, etc.) | Only in `backend/.env` and `.env` **on the old VPS** — never committed | **No** — these must be regenerated/reconfigured from scratch; a database dump does not contain them |
-| Google Drive OAuth authorization (for either destination) | Your Google account | **No** — re-authorize on the new host, same as initial setup |
+| Google Drive OAuth authorization (for either destination) | Your Google account + your personal OAuth client's ID/secret (Google Cloud Console, §6) | **No** — you need your saved client ID/secret (or must recreate the OAuth client in Google Cloud Console if lost) to re-authorize on the new host |
 | Crypt encryption password/salt (only needed if restoring from the *encrypted* destination) | Wherever you stored the password after §1 above | **No** — you must have your own saved copy, or the encrypted destination's dumps are permanently unreadable. **The raw destination does not need this at all**, which is precisely why it exists. |
 
 Do not assume a database backup alone is a full disaster-recovery
@@ -276,11 +306,15 @@ separate artifacts, only one of which this backup pipeline provides:
   the VPS, never committed, never backed up by this pipeline. Must be
   regenerated from scratch on a replacement host.
 - **D. Google Drive/rclone authentication** (the `rclone.conf` token,
-  and the crypt password/salt if restoring from the encrypted
-  destination) — lives only on the VPS (token) and wherever you saved
-  the crypt password yourself (§1). Must be re-authorized/re-entered on
-  a replacement host; this pipeline does not back up its own
-  credentials.
+  the personal OAuth client ID/secret from §6, and the crypt password/
+  salt if restoring from the encrypted destination) — lives only on the
+  VPS (token, client ID/secret) and wherever you saved the crypt
+  password yourself (§1). Must be re-authorized/re-entered on a
+  replacement host; this pipeline does not back up its own credentials,
+  and Google Drive authentication is entirely independent of the
+  PostgreSQL data, application source, `.env` secrets, JWT secret,
+  database password, and Docker configuration — restoring any one of
+  these does not restore any other.
 - **E. VPS rebuild + Docker/application redeployment** — provisioning,
   Docker Engine + rclone install, `docker compose up`, nginx/TLS — see
   DEPLOYMENT.md.
@@ -309,10 +343,14 @@ together into a working system again.
    sessions issued by the destroyed VPS are naturally invalidated by
    this, which is correct.)
 5. **Recreate the rclone configuration** on the new host:
-   `rclone config` → add the `gdrive` remote (re-authorize against the
-   same Google account — same headless-SSH-tunnel browser flow as
-   initial setup). This alone is enough to restore from the **raw**
-   destination.
+   `rclone config` → add the `gdrive` remote as type `drive`, supplying
+   your **personal OAuth client's `client_id`/`client_secret`** (from
+   wherever you saved them per §6 — Google Cloud Console → Credentials
+   if you didn't save them separately; the client/project itself
+   survives a VPS loss since it's not hosted on the VPS) → re-authorize
+   against the same Google account (same headless-SSH-tunnel browser
+   flow as initial setup). This alone is enough to restore from the
+   **raw** destination.
    - **If restoring from the encrypted destination instead** (the
      primary copy), also add the `gcrypt` crypt remote pointing at
      `gdrive:AquaLedger-Backups`, entering **the same encryption
@@ -389,9 +427,25 @@ together into a working system again.
 - This file — added §4a (backup file permissions), restructured §7 with
   an explicit A–E artifact breakdown for disaster recovery.
 - Removed a pre-Session-1 leftover test file
-  (`fisherp_20260825T181553Z.sql`) and two dangling anonymous Docker
-  volumes left over from earlier restore drills — housekeeping only,
-  no production data affected.
+  (`fisherp_20260825T181553Z.sql`) — housekeeping only, no production
+  data affected. Two dangling anonymous Docker volumes from earlier
+  restore drills were identified as safe to remove but the deletion
+  command was blocked by Claude Code's own safety classifier; still
+  pending manual cleanup (see the Session 3 report for the exact safe
+  command).
+
+**Session 4 (Google OAuth client migration — no architecture change):**
+- No script or systemd changes — this session only changed
+  authentication ownership, not backup logic.
+- VPS-only: the `gdrive` remote's `client_id`/`client_secret` in
+  `~/.config/rclone/rclone.conf` were updated to a dedicated personal
+  Google Cloud OAuth client, and re-authorized (`rclone config
+  reconnect gdrive:`). The `gcrypt` remote was untouched (it delegates
+  to `gdrive:` and needed no changes).
+- This file — rewrote §6 (migration is complete, added rotation/
+  recovery instructions), updated the §7 disaster-recovery table and
+  step 5 to reflect that OAuth recovery now needs the personal client's
+  credentials, not just a fresh authorization against the shared one.
 
 Nothing in any session touched application code, Alembic migrations,
 or the frontend/backend business logic.
