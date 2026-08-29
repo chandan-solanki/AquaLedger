@@ -3,6 +3,9 @@ uv run uvicorn app.main:app --reload
 
 admin@fisherp.local
 
+platefromadmin id : admin@fisherp.local
+password : Admin@123
+
 psql -h localhost -p 5432 -U fisherp -d fisherp
 
 Completed Modules
