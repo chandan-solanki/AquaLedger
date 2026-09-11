@@ -4,6 +4,7 @@ import "./globals.css";
 import "../../styles/report-print.css";
 
 import { AppProviders } from "@/providers/app-providers";
+import { SITE_URL } from "@/lib/site-config";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -16,6 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "AquaLedger",
   description: "Modern ERP for the seafood trading industry.",
   icons: {

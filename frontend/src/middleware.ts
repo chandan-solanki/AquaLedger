@@ -9,8 +9,14 @@ import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from "@/lib/auth/cookie-nam
  * validate the token; the authoritative check (with silent refresh) happens
  * client-side via AuthGuard -> /api/auth/session, since only Route Handlers
  * can rotate cookies (07_FRONTEND_ARCHITECTURE.md §4, §10).
+ *
+ * "/" and "/privacy" are the public marketing homepage and privacy policy
+ * (also the pages Google's OAuth consent-screen branding review points at)
+ * — always public, in both directions: unlike /login, being authenticated
+ * does not bounce a visitor away from them.
  */
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", "/", "/privacy"];
+const AUTH_REDIRECT_PATHS = ["/login"];
 
 function hasSessionCookie(request: NextRequest): boolean {
   return request.cookies.has(ACCESS_TOKEN_COOKIE) || request.cookies.has(REFRESH_TOKEN_COOKIE);
@@ -27,7 +33,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  if (isPublicPath && authenticated) {
+  if (AUTH_REDIRECT_PATHS.includes(pathname) && authenticated) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 

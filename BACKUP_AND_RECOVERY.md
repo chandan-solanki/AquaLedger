@@ -398,7 +398,128 @@ together into a working system again.
     access still works for the known admin account restored from the
     dump.
 
-## 8. Files added/modified
+## 9. Public homepage & privacy policy (Google OAuth branding)
+
+The Google Cloud OAuth consent screen for the `gdrive`/`gcrypt` remotes (§6)
+requires public application/homepage and privacy-policy URLs before it can
+be moved out of Testing mode (§10). These are served by the frontend
+application itself — genuinely public routes, reachable without logging
+in (verified: `middleware.ts` exempts them in both directions, and both
+prerender as static pages):
+
+- **Application homepage:** `https://aqualedger.zenmediahouse.com/`
+- **Privacy policy:** `https://aqualedger.zenmediahouse.com/privacy`
+
+Neither page makes an authenticated API call or requires a session to
+render, and neither discloses infrastructure details, credentials, or
+internal API implementation — see `frontend/src/features/marketing/pages/`
+for the source.
+
+**Known gap, not yet filled in:** the privacy policy currently displays a
+placeholder instead of a real contact address
+(`SUPPORT_EMAIL_PLACEHOLDER` in `frontend/src/lib/site-config.ts`) — no
+public support/contact email exists anywhere in this repository today.
+Replace that placeholder (and re-deploy) before relying on the privacy
+policy for the OAuth consent screen or for real users.
+
+## 10. Google OAuth: Testing → Production checklist
+
+This is an **operator checklist** — none of it can be done from the
+codebase or by Claude Code. It only applies to the `gdrive`/`gcrypt`
+backup OAuth client described in §6, not to end-user login (AquaLedger's
+own authentication, §8 of the main architecture doc, does not use Google
+OAuth at all).
+
+**Why this matters:** a Google Cloud OAuth consent screen left in
+*Testing* mode expires a test user's grant after roughly seven days of
+inactivity (or a fixed window, depending on scope), which is the
+`invalid_grant` failure this migration is meant to prevent from recurring.
+Moving the consent screen to *In production* removes that expiry.
+
+1. Deploy the public homepage and privacy policy (§9) to production.
+2. Verify `https://aqualedger.zenmediahouse.com/` loads, returns 200, and
+   does **not** redirect to `/login`, from a private/incognito browser
+   session (no session cookie).
+3. Verify `https://aqualedger.zenmediahouse.com/privacy` loads the same
+   way.
+4. Verify the HTTPS certificate is valid (not expired, matches the
+   domain, no browser warning).
+5. In Google Cloud Console → APIs & Services → OAuth consent screen, fill
+   in the branding fields with:
+   - **Application name:** `AquaLedger Backups`
+   - **Application home page:** `https://aqualedger.zenmediahouse.com/`
+   - **Application privacy policy link:** `https://aqualedger.zenmediahouse.com/privacy`
+   - **Authorized domain:** `zenmediahouse.com`
+   - **Support email:** the real, monitored address that replaces the
+     placeholder in §9 — do not invent one.
+6. Verify `zenmediahouse.com` is a **verified domain** on the Google
+   account being used (Search Console verification, or however Google
+   Cloud Console prompts for it) — required before Google will accept it
+   as an authorized domain.
+7. Review the OAuth scopes this client actually requests (Drive access
+   for `rclone`). A narrow, non-sensitive Drive scope for a single-user
+   Desktop-app client used only by its own owner typically does not
+   trigger Google's full verification/security-assessment process, but
+   Google Cloud Console is authoritative here — follow whatever it
+   prompts for before publishing.
+8. Only once steps 2–7 are satisfied, change the OAuth consent screen's
+   publishing status from **Testing** to **In production** in Google
+   Cloud Console.
+9. Do **not** run `rclone config reconnect gdrive:` unless the existing
+   token has actually stopped working — publishing status alone does not
+   invalidate a currently-valid token.
+10. If Google does require a fresh authorization after the publishing
+    status changes, reconnect using the existing documented procedure
+    (§6): `rclone config reconnect gdrive:` (SSH local port-forward on
+    `53682`, approve in your own browser). This does not touch `gcrypt`,
+    existing backups, or retention settings.
+11. Run a full manual backup: `./scripts/backup-postgres.sh` (§3).
+12. Verify the new backup landed in **both** destinations:
+    `rclone lsl gcrypt:weekly/` and
+    `rclone lsl gdrive:AquaLedger-Backups/weekly/` (§4).
+13. Verify the archive is structurally valid:
+    `pg_restore --list` against the new `.dump` file (the backup script
+    already does this automatically as part of §1's pipeline; re-running
+    it manually here is just operator confirmation).
+14. Record the result (timestamp, `status.json` contents, and the output
+    of steps 12–13) somewhere durable — this is the "Day 0" baseline for
+    §11 below.
+
+## 11. Post-production 7-day OAuth validation
+
+Moving the consent screen to Production (§10) does **not**, by itself,
+prove the `invalid_grant` failure is gone — only a real validation window
+does. Do not tell anyone the backup pipeline is "proven" against the
+7-day expiry until this has actually been carried out and recorded; a
+publishing-status change alone is not evidence.
+
+Do not change the backup schedule (§2) for this — validate against the
+existing weekly timer, not an artificially tightened one.
+
+- **Day 0** — immediately after §10 step 14:
+  - Manual backup already run; encrypted upload verified; raw upload
+    verified; both remote files confirmed present; timestamp recorded.
+- **Day 1:**
+  - `systemctl status aqualedger-backup.timer` and
+    `systemctl is-failed aqualedger-backup.service` — confirm the timer
+    is still `enabled`/`active` and the last run wasn't a failure.
+- **Day 6:**
+  - `rclone lsl gcrypt:weekly/` (or any other read-only rclone command)
+    — confirms the OAuth token is still valid for API calls *before* the
+    old Testing-mode expiry window would have hit, without waiting for a
+    scheduled backup.
+- **Day 7 and beyond:**
+  - Repeat the Day 6 `rclone` access check.
+  - Let the next scheduled Sunday 02:30 UTC backup run (or trigger one
+    manually if you want the checkpoint sooner — §3).
+  - Verify both destinations received the new backup (§4).
+  - Check `~/backups/backup.log` and `status.json` for the absence of
+    `invalid_grant` or any OAuth token-refresh failure.
+  - Only once this is confirmed, it is accurate to record:
+    *"OAuth production-readiness validated after the previous
+    testing-mode expiry window."* Record the date this was confirmed.
+
+## 12. Files added/modified
 
 **Session 1:**
 - `scripts/backup-postgres.sh` — the backup pipeline itself.
@@ -447,5 +568,19 @@ together into a working system again.
   step 5 to reflect that OAuth recovery now needs the personal client's
   credentials, not just a fresh authorization against the shared one.
 
-Nothing in any session touched application code, Alembic migrations,
-or the frontend/backend business logic.
+**Sprint 19 Session 5 (public homepage/privacy page + OAuth
+production-readiness docs — no backup script or architecture change):**
+- No script, systemd, or backend changes.
+- `frontend/`: added the public homepage (`/`) and privacy policy
+  (`/privacy`) required for the Google OAuth consent-screen branding
+  review (§9), and exempted both from the authentication middleware
+  without weakening protection on any existing authenticated route. See
+  the frontend PR/commit for the full file list.
+- This file — added §9 (public homepage/privacy URLs), §10 (Testing →
+  Production checklist), §11 (post-production 7-day validation
+  procedure); renumbered the old §8 "Files added/modified" to §12.
+
+Sessions 1–4 touched no application code, Alembic migrations, or
+frontend/backend business logic. Session 5 touched only the frontend's
+public marketing routes and this document — no backend, database, or
+backup-script changes.
