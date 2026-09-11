@@ -92,11 +92,9 @@ services:
       backend:
         condition: service_healthy
     ports:
-      # Published so a reverse proxy (nginx, Session 4) - or, before that
-      # exists, a direct browser test - can reach it. Not proxied through
-      # anything yet; that's explicitly deferred to the real VPS
-      # deployment session.
-      - "3000:3000"
+      # Frontend is exposed only on localhost.
+      # Public HTTP/HTTPS traffic enters through nginx.
+      - "127.0.0.1:3000:3000"
     healthcheck:
       test:
         [
