@@ -8,9 +8,8 @@ export const SITE_URL = "https://aqualedger.zenmediahouse.com";
 export const SITE_NAME = "AquaLedger";
 
 /**
- * No real public support/contact address exists anywhere in this repo yet
- * (only the seeded internal dev account, admin@fisherp.local, which is not
- * a public contact). Replace with a real monitored address before relying
- * on this for the Google OAuth consent screen or the privacy policy.
+ * The support/contact address shown on the public homepage, footer, and
+ * privacy policy — kept here as the single source so it's never
+ * hardcoded in more than one place.
  */
-export const SUPPORT_EMAIL_PLACEHOLDER = "[SUPPORT_EMAIL_NOT_YET_CONFIGURED]";
+export const SUPPORT_EMAIL = "chandansolanki618@gmail.com";

@@ -3,7 +3,7 @@ import { ArrowLeft } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
-import { SITE_NAME, SUPPORT_EMAIL_PLACEHOLDER } from "@/lib/site-config";
+import { SITE_NAME, SUPPORT_EMAIL } from "@/lib/site-config";
 
 const LAST_UPDATED = "September 11, 2026";
 
@@ -143,7 +143,13 @@ export function PrivacyPage() {
             <p>
               If you have questions about your data, or would like to request access to or
               correction of information held about you, contact us at{" "}
-              <span className="font-medium text-foreground">{SUPPORT_EMAIL_PLACEHOLDER}</span>.
+              <a
+                href={`mailto:${SUPPORT_EMAIL}`}
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                {SUPPORT_EMAIL}
+              </a>
+              .
             </p>
           </Section>
 
@@ -166,7 +172,13 @@ export function PrivacyPage() {
           <Section title="10. Contact">
             <p>
               For any privacy-related questions about {SITE_NAME}, contact{" "}
-              <span className="font-medium text-foreground">{SUPPORT_EMAIL_PLACEHOLDER}</span>.
+              <a
+                href={`mailto:${SUPPORT_EMAIL}`}
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                {SUPPORT_EMAIL}
+              </a>
+              .
             </p>
           </Section>
         </div>

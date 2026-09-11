@@ -415,12 +415,11 @@ render, and neither discloses infrastructure details, credentials, or
 internal API implementation — see `frontend/src/features/marketing/pages/`
 for the source.
 
-**Known gap, not yet filled in:** the privacy policy currently displays a
-placeholder instead of a real contact address
-(`SUPPORT_EMAIL_PLACEHOLDER` in `frontend/src/lib/site-config.ts`) — no
-public support/contact email exists anywhere in this repository today.
-Replace that placeholder (and re-deploy) before relying on the privacy
-policy for the OAuth consent screen or for real users.
+**Support contact:** the homepage footer and privacy policy show a single
+support address, centralized in `SUPPORT_EMAIL` in
+`frontend/src/lib/site-config.ts` — currently `chandansolanki618@gmail.com`.
+Use that same address for the OAuth consent screen's "Support email" field
+(§10 step 5) so the two stay consistent.
 
 ## 10. Google OAuth: Testing → Production checklist
 
@@ -450,8 +449,9 @@ Moving the consent screen to *In production* removes that expiry.
    - **Application home page:** `https://aqualedger.zenmediahouse.com/`
    - **Application privacy policy link:** `https://aqualedger.zenmediahouse.com/privacy`
    - **Authorized domain:** `zenmediahouse.com`
-   - **Support email:** the real, monitored address that replaces the
-     placeholder in §9 — do not invent one.
+   - **Support email:** `chandansolanki618@gmail.com` (§9) — keep this in
+     sync with `SUPPORT_EMAIL` in `frontend/src/lib/site-config.ts` if it
+     ever changes.
 6. Verify `zenmediahouse.com` is a **verified domain** on the Google
    account being used (Search Console verification, or however Google
    Cloud Console prompts for it) — required before Google will accept it

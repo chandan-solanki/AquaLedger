@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { SITE_NAME } from "@/lib/site-config";
+import { SITE_NAME, SUPPORT_EMAIL } from "@/lib/site-config";
 
 export function MarketingFooter() {
   const year = new Date().getFullYear();
@@ -11,7 +11,7 @@ export function MarketingFooter() {
         <p>
           &copy; {year} {SITE_NAME}. All rights reserved.
         </p>
-        <nav className="flex items-center gap-6" aria-label="Footer">
+        <nav className="flex flex-wrap items-center justify-center gap-6" aria-label="Footer">
           <Link href="/" className="hover:text-foreground">
             Home
           </Link>
@@ -21,6 +21,9 @@ export function MarketingFooter() {
           <Link href="/login" className="hover:text-foreground">
             Sign in
           </Link>
+          <a href={`mailto:${SUPPORT_EMAIL}`} className="hover:text-foreground">
+            {SUPPORT_EMAIL}
+          </a>
         </nav>
       </div>
     </footer>
