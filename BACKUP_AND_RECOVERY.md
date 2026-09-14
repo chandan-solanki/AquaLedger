@@ -1,586 +1,310 @@
 # AquaLedger — Backup & Disaster Recovery
 
-Sprint 19 Sessions 1-2. Companion to [DEPLOYMENT.md](DEPLOYMENT.md),
-which covers first-time provisioning; this document covers protecting
-and recovering the production database once the stack is already
-running.
+Companion to [DEPLOYMENT.md](DEPLOYMENT.md), which covers first-time
+provisioning; this document covers protecting and recovering the
+production database once the stack is already running.
+
+**This document was rewritten as part of the Google Drive/rclone backup
+retirement.** The old dual-destination Google Drive pipeline (encrypted
+`gcrypt:weekly` + raw `gdrive:AquaLedger-Backups/weekly`, uploaded by a
+weekly systemd timer) has been fully retired: the timer is disabled and
+removed, `rclone` and its configuration have been removed from the VPS,
+and the 16 backups that were stored on Google Drive have been
+permanently deleted at the owner's explicit request. There is no
+migration path from that data — it no longer exists anywhere. See git
+history around the `Phase 4` commits for the retirement record.
+
+The **only** supported backup mechanism going forward is a manual,
+Windows-laptop-initiated pull over SSH, described below.
+
+---
 
 ## 1. Architecture
 
-Every scheduled/manual run produces **one** validated local backup, then
-uploads it to **two independent Google Drive destinations**:
+Backups are never scheduled and never run unattended. The laptop
+always initiates; the VPS never pushes anywhere.
 
 ```
+Windows laptop (operator-initiated, outbound only)
+        │  ssh, alias "aqualedger-backup", dedicated restricted key
+        ▼
+Production VPS — scripts/backup-ssh-wrapper.sh (forced command)
+        │
+        │  backup-postgres.sh create
+        ▼
 PostgreSQL container (aqualedger-postgres-1)
-        │  pg_dump -Fc, run inside the container over its own
-        │  trusted local connection — no DB password needed
+        │  pg_dump -Fc inside the container, own trusted local
+        │  connection — no DB password ever needed
         ▼
 ~/backups/fisherp_<UTC timestamp>.dump.tmp
         │  pg_restore --list validates the archive TOC
         ▼
-~/backups/fisherp_<UTC timestamp>.dump   (+ .sha256 checksum file)
-        │
-        ├──────────────────────────────┬─────────────────────────────┐
-        ▼                               ▼
-rclone crypt remote "gcrypt:weekly"    rclone plain remote
-        │  encrypts filenames AND      "gdrive:AquaLedger-Backups/weekly"
-        │  contents before upload        │  NO encryption layer —
-        ▼                                 │  meaningful filename, raw
-Google Drive, opaque encrypted name        │  pg_dump bytes as-is
-(the original, still-primary copy)         ▼
-                                       Google Drive,
-                                       fisherp_YYYY-MM-DD_HHMMSS.dump
-                                       (Sprint 19 Session 2, user-requested,
-                                        explicit security trade-off — §1a)
+~/backups/fisherp_<UTC timestamp>.dump  (+ .sha256 sidecar)
+        │  basename/sha256/size printed to stdout — NO retention yet
+        ▼
+        scp -O  (dump, then .sha256)
+        ▼
+Windows laptop: C:\AquaLedger-Backups\postgres\*.download.tmp
+        │  size check, then 3-way SHA256 check (create-reported vs.
+        │  downloaded sidecar vs. locally recomputed)
+        ▼
+   match? ──NO──▶ STOP. Files deleted. VPS backup untouched. Nothing confirmed.
+        │YES
+        ▼
+   rename .download.tmp → final filename
+        ▼
+        ssh, second connection: backup-postgres.sh confirm <basename>
+        ▼
+VPS: independent server-side SHA256 recompute-and-compare, THEN
+     retention trim to the newest 5 local .dump/.sha256 pairs
 ```
 
-Both uploads must succeed and be size-verified before retention cleanup
-runs on **any** of the three locations (local / encrypted remote / raw
-remote) — a failure in either upload aborts the run, keeping every
-existing good backup untouched everywhere.
+The VPS never deletes a backup the laptop hasn't already downloaded
+and verified. The laptop never deletes anything, ever.
 
-- **Format**: `pg_dump -Fc` (PostgreSQL custom format) — chosen over
-  plain SQL because it's compressed, supports `pg_restore --list` for
-  structural validation without a full restore, and allows selective/
-  parallel restore if ever needed. Used for both destinations.
-- **Encrypted destination** (`gcrypt:weekly`, primary copy): an rclone
-  `crypt` remote wraps the `gdrive` remote. Both file contents and
-  file/folder *names* are encrypted (`filename_encryption standard`,
-  `directory_name_encryption true`) — confirmed live: browsing the raw
-  `gdrive:AquaLedger-Backups` folder shows only opaque encrypted names,
-  never `fisherp_...` or `weekly`. The encryption password + salt were
-  generated on the VPS, shown to the account owner once over a
-  verified-by-checksum side channel, and then shredded from the VPS.
-  **They are not stored anywhere else** — losing them means an existing
-  encrypted backup can never be decrypted again. If you haven't stored
-  them in a password manager yet, do that before anything else.
-- **Raw destination** (`gdrive:AquaLedger-Backups/weekly`, added Session
-  2): the plain `gdrive` remote, no crypt layer. Filenames and file
-  contents are exactly the `pg_dump -Fc` output — directly downloadable
-  and restorable from the Drive web UI or `rclone`, without needing the
-  encryption password at all. **This is an explicit, user-requested
-  security trade-off — see §1a.**
-- **Off-site**: both destinations are the same Google account's Drive
-  storage, not another directory or volume on the same VPS — both
-  survive total VPS loss.
-- **Google OAuth client**: as of Sprint 19 Session 4, this setup uses a
-  **dedicated personal Google Cloud OAuth client** (Desktop app type),
-  created and owned by the account owner — not rclone's shared/default
-  client. The retirement warning rclone used to print on every run is
-  gone (verified live). See §6 for how this was migrated, where the
-  client credentials live, and how to recover/rotate them.
+## 2. Required SSH Alias
 
-### 1a. Security warning — the raw backup is unencrypted
+The Windows client (`scripts/backup-aqualedger.ps1`) only ever
+connects via the SSH config alias `aqualedger-backup` — never the
+general admin alias, and never an `IdentityFile` embedded in the
+script itself. The alias must already exist in
+`%USERPROFILE%\.ssh\config`:
 
-**The raw destination (`gdrive:AquaLedger-Backups/weekly`) stores the
-production database backup without any client-side encryption, at the
-account owner's explicit request.** This is a deliberate, understood
-trade-off, not an oversight:
-
-- Anyone who gains access to that Google account — or to whom those
-  specific files are shared — can download and restore the full
-  production database, including all tenant business data.
-- The encrypted `gcrypt:weekly` destination remains the primary,
-  security-hardened copy; the raw copy exists purely for convenience
-  (direct restorability without the encryption password).
-- **Because of this, the Google account holding these backups should
-  use:**
-  - Multi-factor authentication (MFA) — non-negotiable given what these
-    files contain.
-  - A strong, unique password (not reused from any other service).
-  - Periodic review of the account's connected apps/devices
-    (`myaccount.google.com/permissions` and
-    `myaccount.google.com/device-activity`) — remove anything
-    unrecognized.
-- **The raw backup file(s) must never be shared publicly** — not via a
-  Drive "anyone with the link" share, not attached to an email, not
-  committed to any repository.
-- Repository/source-code secrets (`JWT_SECRET_KEY`, `.env` files,
-  `rclone.conf`, the crypt password) remain separate from this backup
-  data regardless — none of them are ever written into a database dump
-  or uploaded anywhere by this pipeline.
-
-## 2. Schedule
-
-- systemd timer `aqualedger-backup.timer`, installed from
-  `scripts/systemd/aqualedger-backup.timer` into
-  `/etc/systemd/system/`, `enable --now`'d.
-- Fires every **Sunday 02:30 UTC** (`OnCalendar=Sun *-*-* 02:30:00`),
-  ±5 minutes of jitter (`RandomizedDelaySec`).
-- `Persistent=true`: if the VPS is down at the scheduled time, the
-  backup runs as soon as it comes back up instead of silently skipping
-  that week.
-- **Verified to survive a real reboot** (`sudo reboot`, not just
-  `systemctl restart`) — the timer came back `enabled`/`active` with a
-  correct next-trigger time, with no manual re-enable step.
-
-## 3. Manual backup
-
-To trigger a backup immediately, on the VPS:
-
-```bash
-cd ~/AquaLedger
-./scripts/backup-postgres.sh
-echo "exit code: $?"
+```
+Host aqualedger-backup
+    HostName <VPS host>
+    User ubuntu
+    IdentityFile C:\Users\<you>\.ssh\aqualedger-backup-ed25519
+    IdentitiesOnly yes
 ```
 
-Exit code `0` = success. Any non-zero exit means something in the
-pipeline failed — check the log (§4) for the reason. A failed run never
-deletes an existing good local or remote backup, and never leaves a
-half-written file at the final `.dump` name (failures only ever leave
-a `.dump.tmp`, which is not treated as a valid backup by anything).
+The script checks this alias exists before doing anything else and
+**never writes to `~/.ssh/config` itself** — if the alias is missing,
+it prints this exact block and stops.
 
-Concurrent runs are safe: a second invocation while one is already
-running exits immediately with `SKIP: another backup run is already in
-progress` (via `flock` on `~/backups/.backup.lock`) rather than racing
-it.
+## 3. Restricted Backup SSH Key
 
-## 4. Checking backup status
+A dedicated `ed25519` key pair, separate from the operator's general
+admin key, is used only for this workflow. On the VPS, its
+`authorized_keys` entry carries a forced command
+(`scripts/backup-ssh-wrapper.sh`) plus
+`no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding`.
 
-**Quick health check** (single JSON object, overwritten every run —
-Sprint 19 Session 3):
+The wrapper only ever executes one of three exact, anchored command
+shapes — everything else is rejected before anything runs:
 
-```bash
-cat ~/backups/status.json
+- `backup-postgres.sh create`
+- `backup-postgres.sh confirm <basename>` (basename must match
+  `fisherp_YYYY-MM-DD_HHMMSS.dump` exactly)
+- `scp -f <path>` (legacy protocol) downloading exactly
+  `/home/ubuntu/backups/<basename>` or `<basename>.sha256`
+
+This key can never open an interactive shell and can never run
+anything outside those three shapes, even if it were copied off the
+laptop.
+
+## 4. How To Create A Backup
+
+From the Windows laptop, with a repository checkout present:
+
+```powershell
+.\scripts\backup-aqualedger.ps1
 ```
 
-Fields: `last_run_utc`, `result` (`success`/`failure`), `reason` (empty
-on success), `basename`, `size_bytes`, `encrypted_uploaded`,
-`raw_uploaded`. This is the fastest way to answer "did last week's
-backup actually work?" without reading the full log — but it only
-reflects the *most recent* run; check the log (below) for history.
+No arguments are required for normal use. The script runs the full
+create → download → verify → confirm sequence in one command and
+prints a stage-by-stage banner (`PostgreSQL health: PASS`, `Creating
+backup: PASS`, `Backup validation: PASS`, `SHA256 generated: PASS`,
+`Download: PASS`, `SHA256 verification: PASS`, then `BACKUP
+SUCCESSFUL`) or a specific failure reason and the stage it failed at
+(`BACKUP FAILED at stage: <stage>`).
 
-**Logs** (append-only, one line per event — never contains passwords,
-tokens, or the encryption password):
+On the VPS side, `create` mode (in `scripts/backup-postgres.sh`)
+acquires an `flock` lock, checks the `postgres` container is healthy,
+checks free disk space (≥500MB by default), runs `pg_dump -Fc` to a
+`.tmp` file, validates it with `pg_restore --list`, computes its
+SHA256, and only then atomically renames it to its final name. It
+prints:
 
-```bash
-tail -50 ~/backups/backup.log
+```
+RESULT=CREATED
+BASENAME=fisherp_2026-09-14_115027.dump
+SHA256=<64-char hex>
+SIZE_BYTES=<integer>
 ```
 
-**Latest local backup:**
+**`create` never deletes or retains anything.** A dropped SSH session
+mid-`pg_dump` is handled by a `trap` that removes the orphaned `.tmp`
+file.
 
-```bash
-ls -lt ~/backups/fisherp_*.dump | head -5
+## 5. How SCP Download Works
+
+Every download uses `scp -O` (the legacy SCP protocol), because
+`backup-ssh-wrapper.sh` only understands that protocol's plain
+`scp -f <path>` command — not the SFTP-subsystem mode modern `scp`
+negotiates by default. `backup-aqualedger.ps1` always passes `-O`.
+
+The dump and its `.sha256` sidecar are downloaded to
+`<basename>.download.tmp` / `<basename>.sha256.download.tmp` in the
+local backup directory — never directly to their final names — and
+are only renamed to the real filenames after every check below
+passes. The script refuses to overwrite an existing local backup with
+the same basename.
+
+## 6. Local SHA256 Verification
+
+Three independent values must all agree before anything is trusted:
+
+- **(A)** the SHA256 `create` printed to stdout,
+- **(B)** the SHA256 inside the downloaded `.sha256` sidecar file,
+- **(C)** a fresh `Get-FileHash -Algorithm SHA256` computed locally
+  on the just-downloaded `.dump` file.
+
+A mismatch between any pair — plus a byte-size mismatch against the
+`SIZE_BYTES` `create` reported — is a hard failure. On any failure
+before this point, `confirm` is never sent, and the run's own
+incomplete `.download.tmp` files are removed (never a previously
+completed backup).
+
+## 7. VPS Confirm / Retention
+
+Only after every check in §6 passes does the laptop open a **second**
+SSH connection and send `backup-postgres.sh confirm <basename>`. The
+VPS independently re-verifies the SHA256 itself (recomputes and
+compares against its own sidecar) before doing anything else — a
+mismatch here aborts with no retention change. Only once that
+succeeds does retention run, trimming `~/backups` to the newest
+`AQUALEDGER_LOCAL_RETENTION` (default **5**) `.dump`/`.sha256` pairs.
+It prints:
+
+```
+RESULT=CONFIRMED
+BASENAME=fisherp_2026-09-14_115027.dump
+RETAINED=5
 ```
 
-**Latest remote backups — encrypted destination** (through the
-`gcrypt:` remote, which shows real filenames by decrypting on the fly;
-browsing the underlying `gdrive:AquaLedger-Backups` folder directly
-shows only opaque encrypted names for this one, which is expected and
-correct):
+## 8. Windows Backup Directory
 
-```bash
-rclone lsl gcrypt:weekly/
-```
+Default: `C:\AquaLedger-Backups\postgres\` (override with
+`-BackupRoot`). Flat layout — `fisherp_YYYY-MM-DD_HHMMSS.dump` plus
+its `.sha256` sidecar, one pair per successful run.
 
-**Latest remote backups — raw destination** (plain `gdrive:` remote,
-meaningful filenames, viewable directly in the Drive web UI too, under
-`AquaLedger-Backups/weekly/`):
+**Every successfully verified backup is kept forever.** The script
+never deletes, overwrites, or prunes anything under this directory —
+disk-space management here is a manual, operator concern.
 
-```bash
-rclone lsl gdrive:AquaLedger-Backups/weekly/
-```
+## 9. VPS Backup Directory
 
-**Scheduler status:**
+`/home/ubuntu/backups/` — holds exactly the newest 5 `.dump`/`.sha256`
+pairs (per §7), a `backup.log`, and a `status.json` reflecting the
+outcome of the most recent `create`/`confirm` run. Mode `700` on the
+directory, `600` on its files.
 
-```bash
-systemctl status aqualedger-backup.timer
-systemctl list-timers aqualedger-backup.timer
-systemctl is-failed aqualedger-backup.service   # "active" or "failed", not "unknown"
-journalctl -u aqualedger-backup.service --since "-14 days"
-```
+## 10. Restore Procedure From A Windows Backup
 
-## 4a. Backup file permissions
+There is no automated restore script — restore is a deliberate,
+manual procedure so it can never run against the wrong target by
+accident:
 
-`~/backups/` is `700` and every file inside it (`.dump`, `.sha256`,
-`backup.log`, `status.json`) is `600` — owner (`ubuntu`) only, no
-group/other read access. The script enforces this explicitly on every
-run (Sprint 19 Session 3) rather than relying on the shell's umask,
-since this host's default umask (`002`) would otherwise leave backups
-group *and* world-readable to any other local account.
-
-## 5. Retention policy
-
-- **Local** (`~/backups/`): keep the newest 14 successful backups
-  (~14 weeks at the weekly cadence). Configurable via
-  `AQUALEDGER_LOCAL_RETENTION`.
-- **Google Drive, encrypted** (`gcrypt:weekly/`): keep the newest 8
-  successful weekly uploads. Configurable via
-  `AQUALEDGER_REMOTE_RETENTION`.
-- **Google Drive, raw** (`gdrive:AquaLedger-Backups/weekly/`): keep the
-  newest 8 successful weekly uploads, independently of the encrypted
-  destination's retention. Configurable via
-  `AQUALEDGER_RAW_REMOTE_RETENTION`.
-- Cleanup only ever runs *after* the current run's backup has been
-  created, validated, **and** successfully uploaded to **both**
-  destinations — never before, and never if either upload fails.
-  Cleanup only ever trims backups *beyond* the keep-count on each of
-  the three locations independently, so as long as each keep-count
-  stays ≥ 1 it can never delete the last surviving backup from any of
-  them.
-- At time of writing the database is ~10 MB and the VPS has ~32 GB
-  free — retention counts are generous relative to actual usage, not a
-  disk-pressure necessity. Revisit only if real data volume grows
-  enough to matter.
-
-## 6. Google OAuth client (migrated off the shared client — Sprint 19 Session 4)
-
-**Done.** The `gdrive` remote (and therefore `gcrypt`, which sits on top
-of it) now authenticates through a **dedicated personal Google Cloud
-OAuth client**, owned by the account owner, instead of rclone's
-shared/default client. rclone's retirement warning no longer appears on
-any run — verified live before and after migration.
-
-**What exists now, and where:**
-
-- A Google Cloud project + OAuth consent screen (Testing mode, the
-  account owner added as a test user) + one OAuth client ID (**Desktop
-  app** type) — all created and owned by the account owner in their own
-  Google Cloud Console. This project/client is **not** managed by this
-  repository or this pipeline in any way.
-- The client ID + client secret are stored **only** inside
-  `~/.config/rclone/rclone.conf` on the VPS (`600`, owner-only) as the
-  `gdrive` remote's `client_id`/`client_secret` fields. **They are not
-  backed up by this pipeline, not committed, and not written anywhere
-  else.** If you want a recovery copy, save them yourself (e.g. in a
-  password manager) the same way you saved the crypt password in §1 —
-  this document does not do that for you.
-- The Drive-access token itself (what actually authorizes API calls)
-  also lives only in `rclone.conf`, refreshed automatically by rclone
-  as needed — no interactive login is required for normal operation,
-  including through systemd (verified).
-
-**If the token ever expires or is revoked** (e.g. you revoke access
-from `myaccount.google.com/permissions`, or don't use it for an
-extended period and Google expires it — routine for a Testing-mode
-app): backups will start failing with an auth error in `backup.log`/
-`status.json`. Re-authorize with:
-
-```bash
-rclone config reconnect gdrive:
-```
-
-This reuses the same client ID/secret already stored in `rclone.conf`
-and only needs the same headless-SSH-tunnel browser flow used for the
-original migration (SSH local port-forward on `53682`, open the printed
-URL in your own browser, approve access). It does not touch the
-`gcrypt` remote, existing backups, or retention settings.
-
-**To rotate the client secret** (e.g. if it's ever accidentally
-exposed): in Google Cloud Console → Credentials → click the OAuth
-client → reset/regenerate the secret, then run
-`rclone config update gdrive client_secret "<new secret>" --non-interactive`
-followed by `rclone config reconnect gdrive:` to re-authorize under it.
-
-**Recreating this from scratch** (e.g. on a replacement VPS, or if the
-Google Cloud project itself is ever deleted) requires repeating the
-manual Google Cloud Console steps once (project → enable Drive API →
-consent screen → test user → OAuth client) — see §7 step 5 for exactly
-when this applies during disaster recovery.
-
-## 7. Disaster recovery: total VPS loss
-
-Assumes the Oracle VPS is completely gone — destroyed, unrecoverable,
-inaccessible.
-
-**What this restores, and what it doesn't:**
-
-| Needed for full recovery | Where it lives | This procedure restores it? |
-|---|---|---|
-| Database contents | Google Drive (encrypted *or* raw — either works, see step 5/7 below) | Yes — this is the point of this doc |
-| Application code | GitHub | Yes — `git clone` |
-| Runtime secrets (`JWT_SECRET_KEY`, `DATABASE_URL`, `POSTGRES_PASSWORD`, CORS origin, etc.) | Only in `backend/.env` and `.env` **on the old VPS** — never committed | **No** — these must be regenerated/reconfigured from scratch; a database dump does not contain them |
-| Google Drive OAuth authorization (for either destination) | Your Google account + your personal OAuth client's ID/secret (Google Cloud Console, §6) | **No** — you need your saved client ID/secret (or must recreate the OAuth client in Google Cloud Console if lost) to re-authorize on the new host |
-| Crypt encryption password/salt (only needed if restoring from the *encrypted* destination) | Wherever you stored the password after §1 above | **No** — you must have your own saved copy, or the encrypted destination's dumps are permanently unreadable. **The raw destination does not need this at all**, which is precisely why it exists. |
-
-Do not assume a database backup alone is a full disaster-recovery
-package — it explicitly is not. Full recovery requires five genuinely
-separate artifacts, only one of which this backup pipeline provides:
-
-- **A. Database backup** — from Google Drive (encrypted or raw). This
-  is what this document's pipeline protects.
-- **B. Application source code** — from GitHub (`git clone`), not from
-  any backup.
-- **C. Application secrets/config** (`JWT_SECRET_KEY`, `.env`,
-  `backend/.env`, `POSTGRES_PASSWORD`, CORS origins) — lives only on
-  the VPS, never committed, never backed up by this pipeline. Must be
-  regenerated from scratch on a replacement host.
-- **D. Google Drive/rclone authentication** (the `rclone.conf` token,
-  the personal OAuth client ID/secret from §6, and the crypt password/
-  salt if restoring from the encrypted destination) — lives only on the
-  VPS (token, client ID/secret) and wherever you saved the crypt
-  password yourself (§1). Must be re-authorized/re-entered on a
-  replacement host; this pipeline does not back up its own credentials,
-  and Google Drive authentication is entirely independent of the
-  PostgreSQL data, application source, `.env` secrets, JWT secret,
-  database password, and Docker configuration — restoring any one of
-  these does not restore any other.
-- **E. VPS rebuild + Docker/application redeployment** — provisioning,
-  Docker Engine + rclone install, `docker compose up`, nginx/TLS — see
-  DEPLOYMENT.md.
-
-The table below maps each artifact to where it actually lives; the
-numbered sequence after it is the order of operations that ties A–E
-together into a working system again.
-
-**Recovery sequence:**
-
-1. **Provision a replacement VPS.** Same or greater spec than the
-   original (1 vCPU / ~6 GB RAM was the tested baseline).
-2. **Install Docker CE** via the official Docker apt repository (see
-   DEPLOYMENT.md §2 for the exact package list), and **install rclone**
-   via `curl https://rclone.org/install.sh | sudo bash`.
-3. **Clone the application repository:**
+1. Pick the desired `.dump` from `C:\AquaLedger-Backups\postgres\`
+   and verify it once more locally:
+   `Get-FileHash -Algorithm SHA256` against its `.sha256` sidecar.
+2. Copy it to wherever you're restoring to (a scratch VPS, a local
+   Docker host — **never the live production instance**), e.g.
+   `scp <file> <target>:/tmp/`.
+3. Bring up a **fresh**, never-production Postgres instance:
+   `docker compose -f docker-compose.prod.yml up -d postgres` against
+   a brand-new, empty volume.
+4. Copy the dump into the container and restore it:
    ```bash
-   git clone <this repo's URL> ~/AquaLedger
-   cd ~/AquaLedger
+   docker cp /tmp/<basename> <container>:/tmp/restore.dump
+   docker exec <container> pg_restore -U <user> -d <db> \
+     --no-owner --no-privileges -v /tmp/restore.dump
    ```
-4. **Recreate production secrets/configuration** — `backend/.env` and
-   the root `.env`, following `backend/.env.production.example` and
-   `.env.production.example` as templates (see DEPLOYMENT.md §4). These
-   are new secrets, not recovered from anywhere — generate a fresh
-   `JWT_SECRET_KEY`, a fresh `POSTGRES_PASSWORD`, etc. (Old tokens/
-   sessions issued by the destroyed VPS are naturally invalidated by
-   this, which is correct.)
-5. **Recreate the rclone configuration** on the new host:
-   `rclone config` → add the `gdrive` remote as type `drive`, supplying
-   your **personal OAuth client's `client_id`/`client_secret`** (from
-   wherever you saved them per §6 — Google Cloud Console → Credentials
-   if you didn't save them separately; the client/project itself
-   survives a VPS loss since it's not hosted on the VPS) → re-authorize
-   against the same Google account (same headless-SSH-tunnel browser
-   flow as initial setup). This alone is enough to restore from the
-   **raw** destination.
-   - **If restoring from the encrypted destination instead** (the
-     primary copy), also add the `gcrypt` crypt remote pointing at
-     `gdrive:AquaLedger-Backups`, entering **the same encryption
-     password and salt you saved** in §1. Verify with
-     `rclone lsl gcrypt:weekly/` — you should see the real backup
-     filenames.
-   - **If restoring from the raw destination**, no crypt password is
-     needed at all — verify with
-     `rclone lsl gdrive:AquaLedger-Backups/weekly/`.
-6. **Bring up Postgres only** (not the full stack yet):
-   ```bash
-   docker compose -f docker-compose.prod.yml up -d postgres
-   ```
-   Wait for it to report healthy (`docker compose ps`).
-7. **Download and restore the latest backup** — from whichever
-   destination you set up in step 5:
-   ```bash
-   # From the raw destination (no crypt password required):
-   SOURCE=gdrive:AquaLedger-Backups/weekly
-   # — or, from the encrypted destination instead:
-   # SOURCE=gcrypt:weekly
+5. Verify with real checks, not just a clean exit code: row counts on
+   key tables, a few known invoice/ledger totals spot-checked against
+   expected values.
+6. Tear down the scratch container/volume once verification is
+   complete. Never point the application layer at a scratch database.
 
-   LATEST=$(rclone lsf "$SOURCE/" | sort | tail -1)
-   rclone copy "$SOURCE/$LATEST" /tmp/
-   docker cp "/tmp/$LATEST" aqualedger-postgres-1:/tmp/restore.dump
-   docker exec aqualedger-postgres-1 pg_restore -U <POSTGRES_USER> \
-     -d <POSTGRES_DB> --no-owner --no-privileges -v /tmp/restore.dump
-   ```
-   (`<POSTGRES_USER>`/`<POSTGRES_DB>` from the `.env` you just created
-   in step 4 — the database must already exist and be empty, which it
-   will be right after step 6's fresh container start.)
-8. **Start the rest of the stack:**
-   ```bash
-   docker compose -f docker-compose.prod.yml up -d
-   ```
-9. **Reconfigure the host layer**: nginx reverse proxy config, TLS
-   certificate (Let's Encrypt if a domain is available, or the
-   self-signed-on-bare-IP approach otherwise — see DEPLOYMENT.md §11
-   and the Sprint 18 Session 5 chat log), iptables rules for ports
-   80/443 (`sudo netfilter-persistent save` after adding them — this
-   VPS image's default firewall rejects everything but SSH until
-   explicitly opened).
-10. **Run smoke tests**: login, session check, dashboard, one document/
-    PDF fetch (e.g. an existing invoice), and confirm platform-admin
-    access still works for the known admin account restored from the
-    dump.
+## 11. PostgreSQL Restore Procedure Notes
 
-## 9. Public homepage & privacy policy (Google OAuth branding)
+`pg_restore` above is invoked **without** `--clean`/`--create` — the
+target database must already exist and be empty. `--no-owner
+--no-privileges` avoids failing on role names that may not exist on
+the restore target. This mirrors exactly how `backup-postgres.sh`
+itself validates a fresh dump (`pg_restore --list`), just applied as
+a real restore instead of a structural check.
 
-The Google Cloud OAuth consent screen for the `gdrive`/`gcrypt` remotes (§6)
-requires public application/homepage and privacy-policy URLs before it can
-be moved out of Testing mode (§10). These are served by the frontend
-application itself — genuinely public routes, reachable without logging
-in (verified: `middleware.ts` exempts them in both directions, and both
-prerender as static pages):
+## 12. Retention Behavior
 
-- **Application homepage:** `https://aqualedger.zenmediahouse.com/`
-- **Privacy policy:** `https://aqualedger.zenmediahouse.com/privacy`
+| Location | Retention |
+|---|---|
+| VPS (`~/backups`) | Newest 5 `.dump`/`.sha256` pairs, trimmed only inside `confirm`, only after a successful checksum re-verification |
+| Windows (`C:\AquaLedger-Backups\postgres\`) | Unlimited — every verified backup is kept forever, no automatic deletion |
 
-Neither page makes an authenticated API call or requires a session to
-render, and neither discloses infrastructure details, credentials, or
-internal API implementation — see `frontend/src/features/marketing/pages/`
-for the source.
+Retention only ever trims *beyond* the keep-count — a `confirm` can
+never delete the backup it was just called for.
 
-**Support contact:** the homepage footer and privacy policy show a single
-support address, centralized in `SUPPORT_EMAIL` in
-`frontend/src/lib/site-config.ts` — currently `chandansolanki618@gmail.com`.
-Use that same address for the OAuth consent screen's "Support email" field
-(§10 step 5) so the two stay consistent.
+## 13. Failure Behavior
 
-## 10. Google OAuth: Testing → Production checklist
+| Failure | What happens |
+|---|---|
+| Postgres unhealthy / `pg_dump` fails / `pg_restore --list` fails | `create` fails before promoting the `.tmp` file; nothing new exists remotely; nothing downloaded |
+| SSH failure (create or confirm) | Reported immediately; no further stage attempted |
+| SCP failure / interrupted download | Local size/SHA256 check fails; `confirm` never sent; run's own temp files removed |
+| SHA256 or size mismatch (any of the 3 checks) | Hard stop; `confirm` never sent; VPS backup and retention untouched |
+| `confirm` SSH/exit failure | The local backup **is already saved and verified** — only the VPS's retention trim didn't run; safe to re-run `confirm` later |
+| VPS-side checksum mismatch during `confirm` | VPS aborts before retention; nothing deleted |
 
-This is an **operator checklist** — none of it can be done from the
-codebase or by Claude Code. It only applies to the `gdrive`/`gcrypt`
-backup OAuth client described in §6, not to end-user login (AquaLedger's
-own authentication, §8 of the main architecture doc, does not use Google
-OAuth at all).
+## 14. Security Considerations
 
-**Why this matters:** a Google Cloud OAuth consent screen left in
-*Testing* mode expires a test user's grant after roughly seven days of
-inactivity (or a fixed window, depending on scope), which is the
-`invalid_grant` failure this migration is meant to prevent from recurring.
-Moving the consent screen to *In production* removes that expiry.
+- The restricted backup key can only ever run the three fixed command
+  shapes in §3 — never an arbitrary shell command.
+- `backup-ssh-wrapper.sh` treats `$SSH_ORIGINAL_COMMAND` strictly as
+  inert data (`[[ == ]]` / `[[ =~ ]]` comparisons only) — it is never
+  `eval`'d or interpolated into an executable command line.
+- No database password is ever needed anywhere in this pipeline —
+  `pg_dump`/`pg_restore` run inside the container over its own
+  trusted local connection.
+- No `sudo` is required anywhere in the backup pipeline itself.
 
-1. Deploy the public homepage and privacy policy (§9) to production.
-2. Verify `https://aqualedger.zenmediahouse.com/` loads, returns 200, and
-   does **not** redirect to `/login`, from a private/incognito browser
-   session (no session cookie).
-3. Verify `https://aqualedger.zenmediahouse.com/privacy` loads the same
-   way.
-4. Verify the HTTPS certificate is valid (not expired, matches the
-   domain, no browser warning).
-5. In Google Cloud Console → APIs & Services → OAuth consent screen, fill
-   in the branding fields with:
-   - **Application name:** `AquaLedger Backups`
-   - **Application home page:** `https://aqualedger.zenmediahouse.com/`
-   - **Application privacy policy link:** `https://aqualedger.zenmediahouse.com/privacy`
-   - **Authorized domain:** `zenmediahouse.com`
-   - **Support email:** `chandansolanki618@gmail.com` (§9) — keep this in
-     sync with `SUPPORT_EMAIL` in `frontend/src/lib/site-config.ts` if it
-     ever changes.
-6. Verify `zenmediahouse.com` is a **verified domain** on the Google
-   account being used (Search Console verification, or however Google
-   Cloud Console prompts for it) — required before Google will accept it
-   as an authorized domain.
-7. Review the OAuth scopes this client actually requests (Drive access
-   for `rclone`). A narrow, non-sensitive Drive scope for a single-user
-   Desktop-app client used only by its own owner typically does not
-   trigger Google's full verification/security-assessment process, but
-   Google Cloud Console is authoritative here — follow whatever it
-   prompts for before publishing.
-8. Only once steps 2–7 are satisfied, change the OAuth consent screen's
-   publishing status from **Testing** to **In production** in Google
-   Cloud Console.
-9. Do **not** run `rclone config reconnect gdrive:` unless the existing
-   token has actually stopped working — publishing status alone does not
-   invalidate a currently-valid token.
-10. If Google does require a fresh authorization after the publishing
-    status changes, reconnect using the existing documented procedure
-    (§6): `rclone config reconnect gdrive:` (SSH local port-forward on
-    `53682`, approve in your own browser). This does not touch `gcrypt`,
-    existing backups, or retention settings.
-11. Run a full manual backup: `./scripts/backup-postgres.sh` (§3).
-12. Verify the new backup landed in **both** destinations:
-    `rclone lsl gcrypt:weekly/` and
-    `rclone lsl gdrive:AquaLedger-Backups/weekly/` (§4).
-13. Verify the archive is structurally valid:
-    `pg_restore --list` against the new `.dump` file (the backup script
-    already does this automatically as part of §1's pipeline; re-running
-    it manually here is just operator confirmation).
-14. Record the result (timestamp, `status.json` contents, and the output
-    of steps 12–13) somewhere durable — this is the "Day 0" baseline for
-    §11 below.
+## 15. ⚠️ Windows Backups Are Unencrypted Full Production Data
 
-## 11. Post-production 7-day OAuth validation
+`C:\AquaLedger-Backups\postgres\*.dump` files are **plain,
+unencrypted** PostgreSQL dumps — a complete copy of the production
+database, including all tenant business data, readable by anyone with
+file access to that folder. This is an explicit, accepted trade-off,
+not an oversight. No encryption layer is applied anywhere in this
+pipeline. The only protections are whatever the laptop itself already
+has: full-disk encryption, the Windows account password/lock screen,
+and physical control of the device. Treat this folder accordingly.
 
-Moving the consent screen to Production (§10) does **not**, by itself,
-prove the `invalid_grant` failure is gone — only a real validation window
-does. Do not tell anyone the backup pipeline is "proven" against the
-7-day expiry until this has actually been carried out and recorded; a
-publishing-status change alone is not evidence.
+## 16. No Google Drive / rclone Backup Support
 
-Do not change the backup schedule (§2) for this — validate against the
-existing weekly timer, not an artificially tightened one.
+The previous Google Drive/rclone pipeline (`gcrypt:weekly` and
+`gdrive:AquaLedger-Backups/weekly`, both inside the operator's
+personal Google Drive account) has been fully retired and its 16
+stored backups permanently deleted. `rclone` and
+`~/.config/rclone/rclone.conf` have been removed from the VPS. There
+is no cloud/off-site copy of any kind in the current architecture —
+see §15 and §17.
 
-- **Day 0** — immediately after §10 step 14:
-  - Manual backup already run; encrypted upload verified; raw upload
-    verified; both remote files confirmed present; timestamp recorded.
-- **Day 1:**
-  - `systemctl status aqualedger-backup.timer` and
-    `systemctl is-failed aqualedger-backup.service` — confirm the timer
-    is still `enabled`/`active` and the last run wasn't a failure.
-- **Day 6:**
-  - `rclone lsl gcrypt:weekly/` (or any other read-only rclone command)
-    — confirms the OAuth token is still valid for API calls *before* the
-    old Testing-mode expiry window would have hit, without waiting for a
-    scheduled backup.
-- **Day 7 and beyond:**
-  - Repeat the Day 6 `rclone` access check.
-  - Let the next scheduled Sunday 02:30 UTC backup run (or trigger one
-    manually if you want the checkpoint sooner — §3).
-  - Verify both destinations received the new backup (§4).
-  - Check `~/backups/backup.log` and `status.json` for the absence of
-    `invalid_grant` or any OAuth token-refresh failure.
-  - Only once this is confirmed, it is accurate to record:
-    *"OAuth production-readiness validated after the previous
-    testing-mode expiry window."* Record the date this was confirmed.
+## 17. No Automatic Scheduled Backup
 
-## 12. Files added/modified
+The `aqualedger-backup.timer`/`.service` systemd units that used to
+run this weekly have been disabled, stopped, and removed from both
+the VPS and this repository. There is currently **no unattended
+backup mechanism of any kind** — if nobody runs
+`.\scripts\backup-aqualedger.ps1`, no new backup is made. This is an
+accepted consequence of the "manual only" requirement, not an
+oversight — the effective RPO is "however long since the operator
+last ran the script."
 
-**Session 1:**
-- `scripts/backup-postgres.sh` — the backup pipeline itself.
-- `scripts/systemd/aqualedger-backup.service` /
-  `aqualedger-backup.timer` — the schedule (copied to
-  `/etc/systemd/system/` on the VPS; not auto-installed by git alone,
-  see §2).
-- This file.
+## 18. Manual Laptop-Initiated Backup Is The Supported Mechanism
 
-**Session 2:**
-- `scripts/backup-postgres.sh` — added the second, raw upload
-  destination and its independent retention; deferred all retention
-  until both uploads succeed. No systemd unit changes were needed (the
-  timer just re-runs the same script path).
-- This file — documented the dual-destination architecture and the
-  unencrypted-storage security trade-off (§1a).
-
-**Session 3 (operational hardening — no architecture change):**
-- `scripts/backup-postgres.sh` — explicit `chmod 700`/`600` on the
-  backup directory and every file it creates (dumps, checksums, log,
-  new status file), independent of the shell's umask; added
-  `status.json` for at-a-glance health checks (§4).
-- `scripts/systemd/aqualedger-backup.service` — added `TimeoutStartSec=
-  1800` (previously unbounded — a hung upload could have blocked the
-  lock forever) and `NoNewPrivileges=true`.
-- This file — added §4a (backup file permissions), restructured §7 with
-  an explicit A–E artifact breakdown for disaster recovery.
-- Removed a pre-Session-1 leftover test file
-  (`fisherp_20260825T181553Z.sql`) — housekeeping only, no production
-  data affected. Two dangling anonymous Docker volumes from earlier
-  restore drills were identified as safe to remove but the deletion
-  command was blocked by Claude Code's own safety classifier; still
-  pending manual cleanup (see the Session 3 report for the exact safe
-  command).
-
-**Session 4 (Google OAuth client migration — no architecture change):**
-- No script or systemd changes — this session only changed
-  authentication ownership, not backup logic.
-- VPS-only: the `gdrive` remote's `client_id`/`client_secret` in
-  `~/.config/rclone/rclone.conf` were updated to a dedicated personal
-  Google Cloud OAuth client, and re-authorized (`rclone config
-  reconnect gdrive:`). The `gcrypt` remote was untouched (it delegates
-  to `gdrive:` and needed no changes).
-- This file — rewrote §6 (migration is complete, added rotation/
-  recovery instructions), updated the §7 disaster-recovery table and
-  step 5 to reflect that OAuth recovery now needs the personal client's
-  credentials, not just a fresh authorization against the shared one.
-
-**Sprint 19 Session 5 (public homepage/privacy page + OAuth
-production-readiness docs — no backup script or architecture change):**
-- No script, systemd, or backend changes.
-- `frontend/`: added the public homepage (`/`) and privacy policy
-  (`/privacy`) required for the Google OAuth consent-screen branding
-  review (§9), and exempted both from the authentication middleware
-  without weakening protection on any existing authenticated route. See
-  the frontend PR/commit for the full file list.
-- This file — added §9 (public homepage/privacy URLs), §10 (Testing →
-  Production checklist), §11 (post-production 7-day validation
-  procedure); renumbered the old §8 "Files added/modified" to §12.
-
-Sessions 1–4 touched no application code, Alembic migrations, or
-frontend/backend business logic. Session 5 touched only the frontend's
-public marketing routes and this document — no backend, database, or
-backup-script changes.
+To summarize: run `.\scripts\backup-aqualedger.ps1` from the Windows
+laptop whenever a backup is wanted. That is the entire backup story
+for this project today — no timer, no cloud upload, no scheduled job.
+Everything above (§1–§14) describes exactly what that one command
+does and how to restore from what it produces.
