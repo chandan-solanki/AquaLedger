@@ -21,7 +21,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$BackupRoot = 'C:\AquaLedger-Backups\postgres',
+    [string]$BackupRoot = 'E:\AquaLedger-Backups\postgres',
     [string]$SshAlias = 'aqualedger-backup',
     [string]$RemoteBackupDir = '/home/ubuntu/backups'
 )
